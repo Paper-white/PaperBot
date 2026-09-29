@@ -55,6 +55,8 @@ class Feature:
         self.default_enabled = default_enabled
         # protected=True：永久放行（例如总管理插件自身）
         self.protected = protected
+        # 已注册的命令元信息：[{"commands": [...], "aliases": [...]}, ...]
+        self.commands: list[dict] = []
         registry.register(self)
 
     # ------------------------------------------------------------------ #
@@ -89,6 +91,14 @@ class Feature:
         kw = dict(kwargs)
         if aliases is not None:
             kw["aliases"] = aliases
+        # 记录命令元信息，供总控插件 %help 展示
+        names = [cmd] if isinstance(cmd, str) else list(cmd)
+        self.commands.append(
+            {
+                "commands": list(names),
+                "aliases": sorted(aliases) if aliases else [],
+            }
+        )
         return on_command(
             cmd,
             rule=self._compose_rule(rule),

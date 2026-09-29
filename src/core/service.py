@@ -156,3 +156,22 @@ async def plugin_overview() -> List[dict]:
         )
     result.sort(key=lambda x: x["name"])
     return result
+
+
+async def enabled_plugin_names(
+    user_id: Optional[str] = None, group_id: Optional[str] = None
+) -> List[str]:
+    """返回在当前上下文下「放行」的插件名（含受保护插件）。"""
+    names: List[str] = []
+    for name, feature in registry.all_features().items():
+        if feature.protected:
+            names.append(name)
+            continue
+        if await resolve_enabled(
+            name,
+            user_id=user_id,
+            group_id=group_id,
+            default=feature.default_enabled,
+        ):
+            names.append(name)
+    return sorted(names)

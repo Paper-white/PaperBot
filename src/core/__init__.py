@@ -5,5 +5,13 @@
 
 from src.core.database import dispose_db, get_session, init_db
 from src.core.feature import Feature
+from src.core.permission import PermLevel, resolve_level
 
-__all__ = ["Feature", "get_session", "init_db", "dispose_db"]
+__all__ = [
+    "Feature",
+    "get_session",
+    "init_db",
+    "dispose_db",
+    "PermLevel",
+    "resolve_level",
+]
