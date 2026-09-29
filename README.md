@@ -4,14 +4,14 @@
 
 PaperBot 在 NoneBot2 之上自研了一层轻量「插件框架」，把「消息收发」交给 NoneBot2，
 把「插件管控 / 权限 / 共享数据」交给自己的框架核心。任何一个功能插件都能被
-**总控插件（`Paperbot_CONSOLE`）** 统一启停，并支持**全局 / 分群 / 分成员**三级作用域。
+**总控插件（`paperbot_console`）** 统一启停，并支持**全局 / 分群 / 分成员**三级作用域。
 
 ---
 
 ## ✨ 特性
 
 - 🎭 **自定义人设对话**（LLM 驱动，Phase 2 规划中）
-- 🧩 **自研插件系统**：每插件一个独立文件，继承 `Feature` 即自动纳管
+- 🧩 **自研插件系统**：每插件一个独立文件夹，继承 `Feature` 即自动纳管（加载即注册）
 - 🛡️ **四级权限**：黑名单 / 普通用户 / 群管理员 / 所有者
 - 🎚️ **三级门控**：成员规则 > 群规则 > 全局规则 > 插件默认开关（就近优先）
 - 🔒 **消息输出守卫**：开发期锁死消息出口，仅允许发往白名单群，杜绝误发
@@ -26,14 +26,17 @@ PaperBot 在 NoneBot2 之上自研了一层轻量「插件框架」，把「消�
 ```
 PaperBot/
 ├── bot.py                  # 启动入口
-├── plugins/                # 功能插件目录（每插件一个独立 .py）
-│   ├── paperbot_console.py # 总控插件（命令 / 权限 / 门控）
-│   └── echo.py             # 示例插件（复读）
+├── plugins/                # 功能插件目录（每个插件一个独立文件夹）
+│   ├── paperbot_console/           # 总控插件（命令 / 权限 / 门控）
+│   │   └── paperbot_console.py     # ← 插件具体代码文件
+│   └── paperbot_echo/              # 示例插件（复读）
+│       └── paperbot_echo.py
 ├── src/
 │   ├── config.py           # 项目配置（pydantic-settings）
 │   └── core/               # 自研框架核心
 │       ├── models.py       # 共享 ORM Base + 公共表
 │       ├── database.py     # 共享 async engine / get_session()
+│       ├── loader.py       # 插件加载器（扫描 plugins/{名}/{代码}.py 并导入）
 │       ├── registry.py     # 内存插件注册表
 │       ├── feature.py      # 功能插件基类 Feature
 │       ├── gate.py         # 门控 Rule
@@ -108,7 +111,7 @@ curl http://127.0.0.1:8080/api/health
 
 > 命令前缀为 `%`（由 `.env` 的 `COMMAND_START` 决定）。标注【所有者】的命令仅 `SUPERUSERS` 可用。
 
-### 总控插件（`Paperbot_CONSOLE`）
+### 总控插件（`paperbot_console`）
 
 | 命令 | 说明 | 权限 |
 |---|---|---|
@@ -125,7 +128,7 @@ curl http://127.0.0.1:8080/api/health
 
 > `%reset` 的作用域写法：`全局` / `本群` / `群:<群号>` / `用户:<QQ>`。
 
-### 示例插件（`echo`）
+### 示例插件（`paperbot_echo`）
 
 | 命令 | 说明 |
 |---|---|
@@ -178,14 +181,27 @@ DELETE /api/plugins/{name}/rule?scope_type=&scope_id=    删除规则
 
 ## 🧩 开发一个插件
 
-在 `plugins/` 下新建一个 `.py` 文件，用 `Feature` 注册（**不要**直接调用 `nonebot.on_command`）：
+**目录约定**：每个插件一个文件夹，插件名建议以 `paperbot_` 开头，代码文件与文件夹同名：
+
+```
+plugins/
+└── paperbot_demo/
+    └── paperbot_demo.py     # 插件具体代码文件
+```
+
+> 加载器 `src/core/loader.py` 会自动扫描 `plugins/` 下**所有子目录中的 `.py` 文件**并导入
+> （也兼容目录内放 `__init__.py`、或直接把单文件放在 `plugins/` 根下）。
+> **无需手工注册**：模块被 import 时创建 `Feature(...)` 即自动登记到框架注册表。
+
+在代码文件里用 `Feature` 注册（**不要**直接调用 `nonebot.on_command`）：
 
 ```python
 from nonebot.adapters.onebot.v11 import Message, MessageEvent
 from nonebot.params import CommandArg
 from src.core.feature import Feature
 
-feature = Feature("demo", display_name="示例", description="一个示例插件")
+# 插件注册名建议 paperbot_ 前缀；display_name 是给用户看的中文名
+feature = Feature("paperbot_demo", display_name="示例", description="一个示例插件")
 
 cmd = feature.command("demo", aliases={"示例"}, priority=50)
 
@@ -194,6 +210,8 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
     await cmd.finish("hello~")
 ```
 
+- **默认启用**：新插件在没有任何规则时默认放行（`default_enabled=True`）；
+  想默认关闭就传 `Feature(..., default_enabled=False)`。
 - 需要存数据？继承 `src.core.models.Base` 定义自己的表，启动时会自动建表。
 - 读写数据库用 `from src.core.database import get_session`，天然与其它插件共享。
 

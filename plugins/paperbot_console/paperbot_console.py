@@ -1,4 +1,4 @@
-"""白纸bot总控插件（Paperbot_CONSOLE）。
+"""白纸bot总控插件（paperbot_console）。
 
 统一管控其它功能插件的启停 + 用户权限，支持三级作用域
 （就近优先：成员 > 群 > 全局）与四级权限（0 黑名单 / 1 普通 / 2 群管 / 3 所有者）。
@@ -35,7 +35,7 @@ from src.core.models import (
 
 # 本插件的注册信息（注册名 / 中文名）
 feature = Feature(
-    "Paperbot_CONSOLE",
+    "paperbot_console",
     display_name="白纸bot总控插件",
     description="白纸bot 的总控台：管控插件启停（全局/分群/分成员）与用户权限（四级）",
     author="paper_white",

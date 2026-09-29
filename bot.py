@@ -23,8 +23,10 @@ from src.core.guard import install_output_guard  # noqa: E402
 
 install_output_guard()
 
-# 加载功能插件（必须在 init 之后）
-nonebot.load_plugins("plugins")
+# 加载功能插件（必须在 init 之后）：扫描 plugins/{插件名}/{代码文件}.py
+from src.core.loader import load_feature_plugins  # noqa: E402
+
+load_feature_plugins("plugins")
 
 # 启动/关闭钩子
 from src.core.bootstrap import on_shutdown, on_startup  # noqa: E402

@@ -2,7 +2,7 @@
 
 用来验证「自研框架」的插件通路与门控是否生效：
 - 用 `%echo 内容` 或 `%复读 内容` 触发；
-- 被总控插件（Paperbot_CONSOLE）禁用后应完全无响应。
+- 被总控插件（paperbot_console）禁用后应完全无响应。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from nonebot.params import CommandArg
 from src.core.feature import Feature
 
 feature = Feature(
-    "echo",
+    "paperbot_echo",
     display_name="回声",
     description="示例插件：复读你输入的内容",
     author="paper_white",
