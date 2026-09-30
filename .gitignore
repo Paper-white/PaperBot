@@ -11,6 +11,7 @@ __pycache__/
 
 # 本地配置 / 密钥
 .env
+.env.bak
 
 # 本地交接文档（含个人环境信息，不提交）
 AGENTS.md
