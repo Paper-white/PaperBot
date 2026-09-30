@@ -1,38 +1,57 @@
-"""WebUI 后端 API。
+"""WebUI 后端入口。
 
-复用 NoneBot 的 fastapi driver app，把路由挂在 `WEBUI_PREFIX`（默认 `/api`）下。
-所有接口与 QQ 命令共用 `src.core.service`，保证双通道行为一致。
+- 复用 NoneBot 的 fastapi driver app，把 API 挂在 `WEBUI_PREFIX`（默认 `/api`）下；
+- 再把 `webui/static/` 作为静态站点挂在 `/`，于是 `http://127.0.0.1:6188/` 就是控制台页面。
+- 所有接口与 QQ 命令共用 `src.core` 业务层，保证双通道行为一致。
 
-鉴权：若 `.env` 里设置了 `WEBUI_TOKEN`，则需带 `Authorization: Bearer <token>`。
+鉴权：若 `.env` 里设置了 `WEBUI_TOKEN`，则需带 `Authorization: Bearer <token>`
+（`/api/health` 与静态页面本身不鉴权）。
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
 
 import nonebot
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
-from src.core import registry, service
-from src.core.models import SCOPE_TYPES
+from src.core import registry
+from webui.routes import commands as commands_routes
+from webui.routes import config as config_routes
+from webui.routes import database as database_routes
+from webui.routes import groups as groups_routes
+from webui.routes import permissions as permissions_routes
+from webui.routes import plugins as plugins_routes
+from webui.routes import settings as settings_routes
+from webui.routes import status as status_routes
 
 logger = nonebot.logger
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+INDEX_FILE = STATIC_DIR / "index.html"
+ASSETS_DIR = STATIC_DIR / "assets"
+
+PREFIX_PLACEHOLDER = "%WEBUI_PREFIX%"
+
+# 允许直接用页面路径访问（例：http://127.0.0.1:6188/status），统一返回同一个单页
+PAGE_NAMES = (
+    "status",
+    "config",
+    "permissions",
+    "plugins",
+    "database",
+    "commands",
+    "settings",
+)
 
 router = APIRouter()
 
 
-async def require_token(authorization: Optional[str] = Header(default=None)) -> None:
-    """可选的 Bearer Token 鉴权。"""
-    token = settings.webui_token
-    if not token:
-        return
-    if authorization != f"Bearer {token}":
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-
 # --------------------------------------------------------------------------- #
-# 基础
+# 健康检查（不鉴权）
 # --------------------------------------------------------------------------- #
 @router.get("/health")
 async def health() -> dict:
@@ -44,89 +63,44 @@ async def health() -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# 插件
+# 各页面子路由
 # --------------------------------------------------------------------------- #
-@router.get("/plugins", dependencies=[Depends(require_token)])
-async def list_plugins() -> dict:
-    return {"items": await service.plugin_overview()}
+router.include_router(status_routes.router)
+router.include_router(config_routes.router)
+router.include_router(plugins_routes.router)
+router.include_router(permissions_routes.router)
+router.include_router(groups_routes.router)
+router.include_router(commands_routes.router)
+router.include_router(database_routes.router)
+router.include_router(settings_routes.router)
+
+# 兼容旧引用
+api_router = router
 
 
-@router.get("/plugins/{name}", dependencies=[Depends(require_token)])
-async def plugin_detail(name: str) -> dict:
-    feature = registry.get(name)
-    if feature is None:
-        raise HTTPException(status_code=404, detail=f"plugin '{name}' not found")
-    rules = await service.list_rules(name)
-    return {
-        "name": feature.name,
-        "display_name": feature.display_name,
-        "description": feature.description,
-        "version": feature.version,
-        "author": feature.author,
-        "default_enabled": feature.default_enabled,
-        "protected": feature.protected,
-        "rules": [
-            {
-                "scope_type": r.scope_type,
-                "scope_id": r.scope_id,
-                "enabled": r.enabled,
-                "updated_by": r.updated_by,
-            }
-            for r in rules
-        ],
-    }
+def _driver_host() -> str:
+    """尽力从 NoneBot driver 配置里取 HOST，取不到就按本地处理。"""
+    try:
+        return str(nonebot.get_driver().config.host)
+    except Exception:  # noqa: BLE001
+        return "127.0.0.1"
 
 
-@router.put("/plugins/{name}/rule", dependencies=[Depends(require_token)])
-async def put_rule(name: str, payload: dict = Body(...)) -> dict:
-    if not registry.has(name):
-        raise HTTPException(status_code=404, detail=f"plugin '{name}' not found")
-
-    scope_type = str(payload.get("scope_type", ""))
-    if scope_type not in SCOPE_TYPES:
-        raise HTTPException(
-            status_code=400, detail=f"scope_type must be one of {SCOPE_TYPES}"
-        )
-
-    scope_id = str(payload.get("scope_id", "") or "")
-    if scope_type != "global" and not scope_id:
-        raise HTTPException(status_code=400, detail="scope_id is required")
-
-    rule = await service.set_rule(
-        name,
-        scope_type,
-        scope_id,
-        bool(payload.get("enabled", True)),
-        updated_by=str(payload.get("updated_by", "webui")),
-    )
-    return {
-        "ok": True,
-        "plugin": name,
-        "scope_type": rule.scope_type,
-        "scope_id": rule.scope_id,
-        "enabled": rule.enabled,
-    }
+def _driver_port() -> int:
+    """尽力从 NoneBot driver 配置里取 PORT，取不到退回 6188。"""
+    try:
+        return int(nonebot.get_driver().config.port)
+    except Exception:  # noqa: BLE001
+        return 6188
 
 
-@router.delete("/plugins/{name}/rule", dependencies=[Depends(require_token)])
-async def delete_rule(
-    name: str,
-    scope_type: str = Query(...),
-    scope_id: str = Query(default=""),
-) -> dict:
-    if scope_type not in SCOPE_TYPES:
-        raise HTTPException(
-            status_code=400, detail=f"scope_type must be one of {SCOPE_TYPES}"
-        )
-    removed = await service.clear_rule(name, scope_type, scope_id)
-    return {"ok": True, "removed": removed}
+def _display_host(host: str) -> str:
+    """0.0.0.0 / :: 这类监听地址在提示里换成回环地址更好点。"""
+    return "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
 
 
-# --------------------------------------------------------------------------- #
-# 挂载
-# --------------------------------------------------------------------------- #
 def setup_webui() -> None:
-    """把路由挂到 NoneBot 的 FastAPI app 上（仅 fastapi driver 有效）。"""
+    """把 API 路由与静态页面挂到 NoneBot 的 FastAPI app 上。"""
     if not settings.webui_enable:
         logger.info("WebUI 已关闭（WEBUI_ENABLE=false）")
         return
@@ -139,4 +113,32 @@ def setup_webui() -> None:
 
     prefix = settings.webui_prefix.rstrip("/") or "/api"
     app.include_router(router, prefix=prefix)
-    logger.success(f"WebUI 已挂载：http://{{host}}:{{port}}{prefix}/health")
+
+    host = _driver_host()
+    if host not in ("127.0.0.1", "localhost", "::1") and not settings.webui_token:
+        logger.warning(
+            f"⚠️ WebUI 绑定在 {host} 且未设置 WEBUI_TOKEN，管理接口可被任意访问，"
+            "请设置 WEBUI_TOKEN 或改回 HOST=127.0.0.1"
+        )
+
+    page_hint = ""
+    origin = f"http://{_display_host(host)}:{_driver_port()}"
+    if INDEX_FILE.is_file():
+        if ASSETS_DIR.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="webui-assets")
+
+        async def _page() -> HTMLResponse:  # pragma: no cover - 页面渲染
+            html = INDEX_FILE.read_text(encoding="utf-8")
+            return HTMLResponse(html.replace(PREFIX_PLACEHOLDER, prefix))
+
+        app.add_api_route("/", _page, methods=["GET"], include_in_schema=False)
+        # 同时接受 /status、/config 这类路径（hash 路由之外的直达地址）
+        for page in PAGE_NAMES:
+            app.add_api_route(f"/{page}", _page, methods=["GET"], include_in_schema=False)
+
+        page_hint = f"，页面 → {origin}/"
+    else:
+        logger.warning(f"未找到前端页面，未挂载控制台：{INDEX_FILE}")
+
+    auth_state = "需 Bearer Token" if settings.webui_token else "无鉴权（仅建议本地使用）"
+    logger.success(f"WebUI 已挂载：{origin}{prefix}/health（{auth_state}）{page_hint}")

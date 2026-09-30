@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaperBot 控制台</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">📄</span>
+        <div class="brand-text">
+          <b>PaperBot</b>
+          <small>白纸bot 控制台</small>
+        </div>
+      </div>
+      <nav id="nav" class="nav"></nav>
+      <div class="side-foot">
+        <span class="dot" id="conn-dot"></span>
+        <span id="conn-text">连接检测中…</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1 id="page-title">状态</h1>
+        <div class="top-actions">
+          <input id="token-input" class="input token" type="password" placeholder="访问令牌（未设置可留空）" autocomplete="off" />
+          <button id="token-save" class="btn ghost">保存令牌</button>
+          <button id="refresh" class="btn">刷新</button>
+        </div>
+      </header>
+      <div id="toast" class="toast"></div>
+      <section id="content" class="content"><div class="loading">加载中…</div></section>
+    </main>
+  </div>
+
+  <script>
+    // 后端返回页面时会把 %WEBUI_PREFIX% 替换成真实的 API 前缀
+    // ⚠️ 占位符不能写成 __WEBUI_PREFIX__，否则替换时会把变量名本身也改掉
+    window.__WEBUI_PREFIX__ = "%WEBUI_PREFIX%";
+  </script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
