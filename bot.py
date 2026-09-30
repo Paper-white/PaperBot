@@ -2,11 +2,12 @@
 
 启动流程：
 1. nonebot.init()（读取 .env）
-2. 注册 OneBot v11 适配器
-3. 安装「消息输出守卫」（开发测试期锁死消息出口）
-4. 加载 plugins/ 下的所有功能插件（插件 import 时向框架注册 Feature）
-5. 注册启动/关闭钩子（建表 + 同步插件元信息）
-6. 挂载 WebUI 后端路由
+2. 挂日志文件输出（logs/ 下每次运行一个日志文件）
+3. 注册 OneBot v11 适配器
+4. 安装「消息输出守卫」（开发测试期锁死消息出口）
+5. 加载 plugins/ 下的所有功能插件（插件 import 时向框架注册 Feature）
+6. 注册启动/关闭钩子（建表 + 同步插件元信息）
+7. 挂载 WebUI 后端路由
 """
 
 import nonebot
@@ -14,6 +15,13 @@ from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
 # 初始化 NoneBot（读取项目根目录的 .env）
 nonebot.init()
+
+# 日志文件输出（越早越好，后面的启动过程都留痕）
+from src.core.logging import log_dir, setup_file_logging  # noqa: E402
+
+_log_file = setup_file_logging()
+if _log_file is not None:
+    nonebot.logger.success(f"日志文件已开启：{_log_file}（目录：{log_dir()}）")
 
 driver = nonebot.get_driver()
 driver.register_adapter(OneBotV11Adapter)

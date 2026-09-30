@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -26,10 +27,15 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from src.config import settings
+from src.core.logger import logger
 from src.core.models import Base
 
 _engine: Optional[AsyncEngine] = None
 _session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+
+
+def _is_sqlite(url: str) -> bool:
+    return url.startswith("sqlite")
 
 
 def _ensure_engine() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -39,12 +45,26 @@ def _ensure_engine() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
         url = settings.database_url
 
         # SQLite：确保数据目录存在
-        if url.startswith("sqlite"):
+        if _is_sqlite(url):
             raw_path = url.split("///", 1)[-1]
             if raw_path and raw_path != ":memory:":
                 Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
 
         _engine = create_async_engine(url, echo=False, future=True)
+
+        # SQLite 调优：开启 WAL（读写并发）+ busy_timeout（避免 database is locked）
+        if _is_sqlite(url):
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, _record) -> None:  # noqa: ANN001
+                cursor = dbapi_conn.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                finally:
+                    cursor.close()
+
         _session_factory = async_sessionmaker(
             _engine, expire_on_commit=False, class_=AsyncSession
         )
@@ -52,21 +72,71 @@ def _ensure_engine() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     return _engine, _session_factory
 
 
+async def _add_missing_columns(conn) -> list[str]:  # noqa: ANN001 - AsyncConnection
+    """SQLite 极简迁移：给「已存在但少列」的表补上 ORM 新增的列。
+
+    `create_all()` 只建新表、不改旧表，所以在已有 `data/paperbot.db` 上
+    新增字段（如 `plugin_info.repo`）会报 `no such column`。这里用
+    `ALTER TABLE ... ADD COLUMN` 兜住：只加列、不改类型、不删列，安全无痛。
+
+    跳过：主键列、以及「非空且无默认值」的列（SQLite 加不了，只记日志）。
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    existing_tables = set(await conn.run_sync(lambda c: sa_inspect(c).get_table_names()))
+
+    added: list[str] = []
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        have = {col["name"] for col in await conn.run_sync(
+            lambda c, t=table.name: sa_inspect(c).get_columns(t)
+        )}
+        for column in table.columns:
+            if column.name in have or column.primary_key:
+                continue
+            if not column.nullable and column.server_default is None:
+                logger.warning(
+                    f"表 {table.name} 缺少非空列 {column.name} 且无默认值，"
+                    f"无法自动补列，请手工处理"
+                )
+                continue
+            ddl_type = column.type.compile(dialect=conn.dialect)
+            ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl_type}'
+            if column.server_default is not None:
+                # server_default 是 SQL 片段（如 CURRENT_TIMESTAMP），原样拼进去
+                default_sql = getattr(column.server_default, "arg", column.server_default)
+                default_sql = getattr(default_sql, "text", default_sql)
+                ddl += f" DEFAULT {default_sql}"
+            await conn.exec_driver_sql(ddl)
+            added.append(f"{table.name}.{column.name}")
+    return added
+
+
 async def init_db() -> None:
-    """建立连接并创建所有表（若不存在）。"""
+    """建立连接并创建所有表（若不存在），并补齐旧表缺失的新列。"""
     engine, _ = _ensure_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        added = await _add_missing_columns(conn)
+    if added:
+        logger.info(f"数据库结构已自动补齐：{', '.join(added)}")
 
 
 @asynccontextmanager
-async def get_session() -> AsyncIterator[AsyncSession]:
-    """获取一个自动提交/回滚的 session 上下文。"""
+async def get_session(*, readonly: bool = False) -> AsyncIterator[AsyncSession]:
+    """获取一个 session 上下文。
+
+    - ``readonly=False``（默认）：退出时自动 commit（写路径用）；
+    - ``readonly=True``：退出时不 commit（纯读路径用，省一次事务开销）。
+    两种情况出错都会 rollback。
+    """
     _, factory = _ensure_engine()
     async with factory() as session:
         try:
             yield session
-            await session.commit()
+            if not readonly:
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

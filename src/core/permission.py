@@ -132,7 +132,7 @@ async def clear_level(user_id: str, *, group_id: Optional[str] = None) -> bool:
 
 
 async def list_grants() -> List[UserPermission]:
-    async with get_session() as session:
+    async with get_session(readonly=True) as session:
         stmt = select(UserPermission).order_by(
             UserPermission.user_id, UserPermission.scope_type, UserPermission.scope_id
         )
@@ -142,12 +142,31 @@ async def list_grants() -> List[UserPermission]:
 # --------------------------------------------------------------------------- #
 # 核心：解析某用户此刻的权限等级
 # --------------------------------------------------------------------------- #
+async def _grant_level(
+    session, user_id: str, group_id: Optional[str]
+) -> Optional[PermLevel]:
+    """查手动授权记录（群 > 全局），命中返回等级，否则 None。"""
+    if group_id is not None:
+        grant = await _get_grant(session, user_id, SCOPE_GROUP, str(group_id))
+        if grant is not None:
+            return _coerce_level(grant.level)
+    grant = await _get_grant(session, user_id, SCOPE_GLOBAL, "")
+    if grant is not None:
+        return _coerce_level(grant.level)
+    return None
+
+
 async def resolve_level(
     user_id: Optional[str],
     group_id: Optional[str] = None,
     role: Optional[str] = None,
+    *,
+    session=None,
 ) -> PermLevel:
-    """解析用户在指定上下文下的权限等级。"""
+    """解析用户在指定上下文下的权限等级。
+
+    ``session`` 可选：由调用方传入可复用的 session（避免一轮事件里重复开库）。
+    """
     uid = str(user_id) if user_id is not None else ""
 
     # 1. 所有者最高优先
@@ -156,14 +175,13 @@ async def resolve_level(
 
     # 2/3. 手动授权记录（群 > 全局）
     if uid:
-        async with get_session() as session:
-            if group_id is not None:
-                grant = await _get_grant(session, uid, SCOPE_GROUP, str(group_id))
-                if grant is not None:
-                    return _coerce_level(grant.level)
-            grant = await _get_grant(session, uid, SCOPE_GLOBAL, "")
-            if grant is not None:
-                return _coerce_level(grant.level)
+        if session is not None:
+            level = await _grant_level(session, uid, group_id)
+        else:
+            async with get_session(readonly=True) as own_session:
+                level = await _grant_level(own_session, uid, group_id)
+        if level is not None:
+            return level
 
     # 4. 群角色自动判定
     auto = role_level(role)

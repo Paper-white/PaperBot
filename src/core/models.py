@@ -11,8 +11,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # ---- 作用域常量 ----
@@ -58,11 +67,40 @@ class PluginInfo(Base):
     description: Mapped[str] = mapped_column(String(512), default="")
     version: Mapped[str] = mapped_column(String(32), default="0.1.0")
     author: Mapped[str] = mapped_column(String(64), default="")
+    # repo / requires 是可选的补充元信息：声明为 nullable，
+    # 这样老库能用 `ALTER TABLE ADD COLUMN` 平滑补列（见 database._add_missing_columns）。
+    repo: Mapped[Optional[str]] = mapped_column(String(256), default="")
+    requires: Mapped[Optional[str]] = mapped_column(String(64), default="")
     default_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     protected: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class PluginConfig(Base):
+    """插件级配置项（`plugin_name + key` 唯一）。
+
+    值统一按 JSON 文本存储（`pluginconf.dump_value` / `load_value`），
+    这样 str / int / bool / list 都能原样存取；**没有记录 = 用 schema 里的默认值**。
+    """
+
+    __tablename__ = "plugin_config"
+    __table_args__ = (
+        UniqueConstraint("plugin_name", "key", name="uq_plugin_config"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), index=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_by: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<PluginConfig {self.plugin_name}.{self.key}={self.value!r}>"
 
 
 class PluginRule(Base):
@@ -95,6 +133,36 @@ class PluginRule(Base):
         return (
             f"<PluginRule {self.plugin_name} {self.scope_type}:{self.scope_id} "
             f"enabled={self.enabled}>"
+        )
+
+
+class CommandRule(Base):
+    """命令权限覆盖表。
+
+    - **默认权限**由插件在代码里声明（`Feature.command(..., level=1)`）；
+    - **实际权限**由本表覆盖维护，可在 WebUI 命令管理页随时改；
+    - 删除记录即「恢复默认」。
+
+    同 (plugin_name, command_name) 唯一；`command_name` 用主命令名（不含前缀）。
+    """
+
+    __tablename__ = "command_rule"
+    __table_args__ = (
+        UniqueConstraint("plugin_name", "command_name", name="uq_command_rule"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), index=True)
+    command_name: Mapped[str] = mapped_column(String(64), index=True)
+    level: Mapped[int] = mapped_column(Integer, default=LEVEL_USER)
+    updated_by: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return (
+            f"<CommandRule {self.plugin_name}.{self.command_name} level={self.level}>"
         )
 
 

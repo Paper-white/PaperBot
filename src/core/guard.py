@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 import nonebot
 
-from src.config import settings
+from src.config import active_groups, settings, using_legacy_groups
 
 logger = nonebot.logger
 
@@ -42,8 +42,7 @@ _AUTO_TARGET_APIS = {"send_msg"}
 def _is_allowed_group(group_id: Any) -> bool:
     if group_id is None:
         return False
-    allowed = {str(g) for g in settings.output_guard_groups}
-    return str(group_id) in allowed
+    return str(group_id) in active_groups()
 
 
 def is_api_allowed(api: str, data: Dict[str, Any]) -> bool:
@@ -92,8 +91,20 @@ def install_output_guard() -> None:
     Bot.call_api = guarded_call_api  # type: ignore[method-assign]
     Bot._paperbot_output_guard = True  # type: ignore[attr-defined]
 
+    if using_legacy_groups():
+        logger.warning(
+            "⚠️ 检测到已废弃的 OUTPUT_GUARD_GROUPS，请改名为 BOT_ACTIVE_GROUPS"
+            "（门控默认策略与输出守卫已共用同一份群白名单）"
+        )
+
     if settings.output_guard_enabled:
-        groups = "、".join(str(g) for g in settings.output_guard_groups) or "（无 → 全部拦截）"
+        groups = "、".join(sorted(active_groups())) or "（无 → 全部拦截）"
         logger.success(f"🛡️ 消息输出守卫已启用，仅允许发往群：{groups}；私聊一律拦截")
     else:
         logger.warning("⚠️ 消息输出守卫未启用（OUTPUT_GUARD_ENABLED=false），可向任意目标发消息！")
+
+    if not settings.gate_default_enabled:
+        groups = "、".join(sorted(active_groups())) or "（无 → 全群默认禁用）"
+        logger.success(
+            f"🚦 框架级门控默认策略：全局默认禁用，仅白名单群跟随插件默认值 → {groups}"
+        )

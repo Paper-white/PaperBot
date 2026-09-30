@@ -32,9 +32,30 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    # 消息输出守卫（开发测试期锁死消息出口，只允许发往白名单群）
+    # 日志文件：每次运行写入 logs/paperbot-<时间戳>.log
+    log_file_enable: bool = True
+    log_file_level: str = "DEBUG"
+    log_dir: str = "logs"
+    # 日志保留天数（<=0 表示不自动清理）
+    log_keep_days: int = 7
+
+    # ============ 消息安全（门控默认策略 + 输出守卫共用一份群白名单） ============
+    # 「Bot 允许活跃的群」——唯一白名单来源：
+    #   · 门控默认策略：未显式配置规则的群，只有在此列表内才跟随插件默认值放行；
+    #   · 消息输出守卫：只允许往这些群发消息（私聊一律拦截）。
+    # 留空 = 不向任何群发消息（安全默认，真实群号只写在 .env）。
+    bot_active_groups: list[str] = []
+
+    # 框架级默认门控策略：
+    #   True  = 未配置规则时跟随插件自己的 default_enabled（旧行为）
+    #   False = 「全局默认禁用」，未配置规则的群/用户一律按禁用处理，
+    #           仅 BOT_ACTIVE_GROUPS 里的群在未配置规则时跟随插件默认值。
+    gate_default_enabled: bool = True
+
+    # 消息输出守卫（开发测试期锁死消息出口，只允许发往 BOT_ACTIVE_GROUPS）
     output_guard_enabled: bool = True
-    output_guard_groups: list[str] = ["123456789"]
+    # ⚠️ 已废弃：改用 BOT_ACTIVE_GROUPS（两处白名单合并）。仅为兼容旧 .env 保留。
+    output_guard_groups: list[str] = []
 
     # ============ 渲染（文本 / Markdown → 图片） ============
     # 卡片宽度（像素，固定）与截图缩放倍数（2 = 高清）
@@ -53,3 +74,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def active_groups() -> set[str]:
+    """「Bot 允许活跃的群」白名单（门控默认策略 + 输出守卫共用）。
+
+    优先用新键 `BOT_ACTIVE_GROUPS`；若为空而旧键 `OUTPUT_GUARD_GROUPS` 有值，
+    则回退到旧键（兼容旧 `.env`，启动时会打一条迁移提示）。
+    """
+    groups = settings.bot_active_groups or settings.output_guard_groups
+    return {str(g) for g in groups}
+
+
+def using_legacy_groups() -> bool:
+    """是否仍在用已废弃的 `OUTPUT_GUARD_GROUPS`（用于启动提示）。"""
+    return not settings.bot_active_groups and bool(settings.output_guard_groups)

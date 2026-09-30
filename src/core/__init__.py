@@ -3,13 +3,20 @@
 对外暴露最常用的入口，方便插件 `from src.core import Feature, get_session`。
 """
 
+from src.core.cmdperm import CommandPermission
 from src.core.database import dispose_db, get_session, init_db
 from src.core.feature import Feature
+from src.core.logger import PrefixedLogger, get_logger
 from src.core.permission import PermLevel, resolve_level
 from src.core.render import render_markdown, render_text
+from src.core.version import FRAMEWORK_VERSION
 
 __all__ = [
     "Feature",
+    "CommandPermission",
+    "PrefixedLogger",
+    "FRAMEWORK_VERSION",
+    "get_logger",
     "get_session",
     "init_db",
     "dispose_db",
