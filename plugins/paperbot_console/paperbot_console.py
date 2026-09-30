@@ -6,8 +6,8 @@
 命令（前缀 `%`）::
 
     %help [插件名]            无参：列出当前已启用的插件；带参：看某插件的命令与介绍
-    %on  <插件名> [群号]      在对应群启用插件（省略=本群；群号填 all 则全局启用）  【所有者】
-    %off <插件名> [群号]      在对应群禁用插件（省略=本群；群号填 all 则全局禁用）  【所有者】
+    %on  <插件名> [目标]      在对应作用域启用插件（省略=本群；all=全局；用户:QQ） 【所有者】
+    %off <插件名> [目标]      在对应作用域禁用插件（省略=本群；all=全局；用户:QQ） 【所有者】
     %plugin <插件名>          查看该插件在全局 / 各群的开关状态                    【所有者】
     %admin add <QQ> [群号]    授予该用户 2 级管理员权限（仅在对应群生效）          【所有者】
     %admin del <QQ> [群号]    移除手动授予的管理员权限                            【所有者】
@@ -45,22 +45,45 @@ feature = Feature(
 
 # %help 对所有（非黑名单）用户开放；其余命令需所有者权限
 help_cmd = feature.command(
-    "help", aliases={"帮助", "菜单", "列表", "list"}, priority=1
+    "help",
+    aliases={"帮助", "菜单", "列表", "list"},
+    priority=1,
+    description="无参：列出当前已启用的插件；带参：查看某插件的命令与介绍",
 )
 on_cmd = feature.command(
-    "on", aliases={"开", "启用"}, permission=SUPERUSER, priority=1
+    "on",
+    aliases={"开", "启用"},
+    permission=SUPERUSER,
+    priority=1,
+    description="在指定作用域启用插件（省略=本群；all=全局；用户:QQ）",
 )
 off_cmd = feature.command(
-    "off", aliases={"关", "禁用"}, permission=SUPERUSER, priority=1
+    "off",
+    aliases={"关", "禁用"},
+    permission=SUPERUSER,
+    priority=1,
+    description="在指定作用域禁用插件（省略=本群；all=全局；用户:QQ）",
 )
 plugin_cmd = feature.command(
-    "plugin", aliases={"插件", "状态", "status"}, permission=SUPERUSER, priority=1
+    "plugin",
+    aliases={"插件", "状态", "status"},
+    permission=SUPERUSER,
+    priority=1,
+    description="查看某插件在全局 / 各群 / 各成员的开关状态",
 )
 admin_cmd = feature.command(
-    "admin", aliases={"管理员", "权限"}, permission=SUPERUSER, priority=1
+    "admin",
+    aliases={"管理员", "权限"},
+    permission=SUPERUSER,
+    priority=1,
+    description="管理员与黑名单管理：add / del / black / unblack <QQ> [群号]",
 )
 reset_cmd = feature.command(
-    "reset", aliases={"重置"}, permission=SUPERUSER, priority=1
+    "reset",
+    aliases={"重置"},
+    permission=SUPERUSER,
+    priority=1,
+    description="清除某插件在指定作用域的规则（全局 / 本群 / 群:号 / 用户:号）",
 )
 
 ADMIN_HELP = (
@@ -97,7 +120,10 @@ def _require_plugin(name: str) -> str:
 
 
 def _parse_target(token, event: MessageEvent, *, default_global: bool = False):
-    """解析「群号 / all」目标 → (scope_type, scope_id)。"""
+    """解析目标 → (scope_type, scope_id)。
+
+    支持：省略=本群 / ``all``=全局 / ``群号`` 或 ``群:号`` / ``用户:QQ``。
+    """
     gid = getattr(event, "group_id", None)
     t = (token or "").strip()
 
@@ -109,11 +135,18 @@ def _parse_target(token, event: MessageEvent, *, default_global: bool = False):
         raise ValueError("当前不是群聊，请指定群号，或用 all 表示全局")
     if t in ("all", "全部", "全局", "global", "g"):
         return SCOPE_GLOBAL, ""
+    if t.startswith(("用户:", "成员:", "member:")):
+        sid = t.split(":", 1)[1].strip()
+        if not sid.isdigit():
+            raise ValueError(f"用户 QQ 号不合法：{sid}")
+        return SCOPE_MEMBER, sid
     if t.startswith("群:"):
         t = t.split(":", 1)[1].strip()
     if t.isdigit():
         return SCOPE_GROUP, t
-    raise ValueError(f"无法识别的目标：{token}（可用：省略=本群 / all=全局 / 群号）")
+    raise ValueError(
+        f"无法识别的目标：{token}（可用：省略=本群 / all=全局 / 群号 / 用户:QQ）"
+    )
 
 
 def _parse_scope(token, event: MessageEvent):
@@ -183,7 +216,10 @@ async def _render_plugin_help(name: str, event: MessageEvent) -> str:
                 alias = "（别名：" + "、".join(f"%{a}" for a in c["aliases"]) + "）"
             else:
                 alias = ""
-            lines.append(f"  {cmds}{alias}")
+            level = int(c.get("default_level", 1) or 1)
+            need = perm.LEVEL_NAMES.get(level, f"{level} 级")
+            desc = f" —— {c['description']}" if c.get("description") else ""
+            lines.append(f"  {cmds}{alias}{desc}  [{need}]")
     else:
         lines.append("（该插件暂无可展示的命令）")
 
