@@ -3,7 +3,7 @@ name = "paperbot"
 version = "0.1.0"
 description = "白纸姐姐的自定义人设 QQ 机器人（基于 NoneBot2）"
 requires-python = ">=3.11,<3.12"
-dependencies = []
+dependencies = ["playwright>=1.63.0,<2", "markdown>=3.11,<4", "pygments>=2.21.0,<3", "jinja2>=3.1.6,<4", "pymdown-extensions>=12.1,<13"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]

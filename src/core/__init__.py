@@ -6,6 +6,7 @@
 from src.core.database import dispose_db, get_session, init_db
 from src.core.feature import Feature
 from src.core.permission import PermLevel, resolve_level
+from src.core.render import render_markdown, render_text
 
 __all__ = [
     "Feature",
@@ -14,4 +15,6 @@ __all__ = [
     "dispose_db",
     "PermLevel",
     "resolve_level",
+    "render_markdown",
+    "render_text",
 ]

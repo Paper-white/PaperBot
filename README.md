@@ -17,6 +17,7 @@ PaperBot 在 NoneBot2 之上自研了一层轻量「插件框架」，把「消�
 - 🔒 **消息输出守卫**：开发期锁死消息出口，仅允许发往白名单群，杜绝误发
 - 🗄️ **共享数据库**：所有插件共用同一 SQLite（SQLAlchemy 2.0 async + aiosqlite），天然数据互通
 - 🖥️ **WebUI 后端 API**：内嵌 FastAPI，挂载于 `/api`
+- 🖼️ **文本渲染出图**：Markdown / 文本 → PNG（Playwright 无头浏览器 + 二次元风模板，支持表格 / 代码高亮 / 任务列表）
 - 🔌 **协议端**：SnowLuma（OneBot v11）
 
 ---
@@ -43,7 +44,11 @@ PaperBot/
 │       ├── guard.py        # 消息输出守卫
 │       ├── permission.py   # 四级权限解析
 │       ├── service.py      # 门控 / 权限业务逻辑（命令 & WebUI 共用）
-│       └── bootstrap.py    # 启动钩子（建表 + 同步插件元信息）
+│       ├── render.py       # 渲染核心：文本 / Markdown → PNG（Playwright）
+│       ├── templates/      # 渲染模板（markdown.html + markdown.css）
+│       └── bootstrap.py    # 启动钩子（建表 + 同步插件元信息 + 释放渲染浏览器）
+├── assets/                 # 必要素材（被代码/配置引用才入库）
+│   └── Q-OC.png            # 渲染卡片背景贴图（RENDER_BG_IMAGE 引用）
 ├── webui/api.py            # WebUI 后端路由（/api）
 ├── data/                   # 运行时数据（SQLite，不提交）
 └── pyproject.toml          # pixi 工作区配置

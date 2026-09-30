@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- css 由渲染器注入（读 markdown.css 全文） -->
+    <style type="text/css">
+        {{ css | safe }}
+    </style>
+</head>
+
+<body>
+    <article class="markdown-body">
+        {# 可选：顶部标题栏，不传则不渲染 #}
+        {% if header %}<div class="pb-header">{{ header }}</div>{% endif %}
+
+        {# content：Markdown 转出来的 HTML 正文 #}
+        {{ content | safe }}
+
+        {# 底部页脚（常显：两行固定文案） #}
+        <div class="pb-footer">{{ footer }}</div>
+    </article>
+</body>
+
+</html>

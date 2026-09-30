@@ -1,0 +1,263 @@
+/* ============================================================
+ * PaperBot 渲染样式 · 二次元风基线
+ * 所有可调项都在 :root 变量里，改变量即可换肤，无需动下面规则。
+ * ============================================================ */
+
+:root {
+    /* —— 版式 —— */
+    --pb-width: 720px;              /* 卡片宽度 */
+    --pb-padding: 32px;             /* 卡片内边距 */
+    --pb-radius: 18px;              /* 卡片圆角 */
+    --pb-gap: 24px;                 /* 卡片上下留白 */
+    --pb-min-height: 320px;         /* 卡片最低高度（内容少也不塌） */
+
+    /* —— 背景贴图（OC 图，半透明叠在底色上） —— */
+    --pb-bg-image: none;            /* 例：url("oc.png")；多张用逗号分隔 */
+    --pb-bg-image-opacity: 0.22;    /* 叠图透明度（0~1） */
+    --pb-bg-image-size: 58%;        /* 58% 卡片宽（当前默认）/ cover 铺满 / contain 完整放入 */
+    --pb-bg-image-position: bottom right;   /* 默认压在右下角 */
+
+    /* —— 字体 —— */
+    --pb-font: "LXGW WenKai", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+    --pb-font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+    --pb-font-size: 16px;
+    --pb-line-height: 1.75;
+
+    /* —— 配色 —— */
+    --pb-bg: #e1e5fb;               /* 页面底色 */
+    --pb-card-bg: #e1e5fb;          /* 卡片底色（OC 图叠在这上面） */
+    --pb-text: #3a3a4a;             /* 正文 */
+    --pb-heading: #d6336c;          /* 标题 */
+    --pb-muted: #8a8a9e;            /* 次要文字 */
+    --pb-accent: #ff79c6;           /* 主强调色（少女粉） */
+    --pb-accent-2: #8be9fd;         /* 次强调色（天蓝） */
+    --pb-link: #e64980;             /* 链接 */
+    --pb-shadow: 0 10px 34px rgba(96, 116, 190, .28);   /* 卡片阴影 */
+
+    /* —— 代码 —— */
+    --pb-code-bg: #2b2b3c;          /* 代码块底 */
+    --pb-code-text: #f8f8f2;        /* 代码块文字 */
+    --pb-inline-bg: rgba(255, 121, 198, .12);   /* 行内代码底 */
+    --pb-inline-text: #d6336c;      /* 行内代码字 */
+
+    /* —— 引用 —— */
+    --pb-quote-bg: rgba(139, 233, 253, .14);
+    --pb-quote-border: #8be9fd;
+    --pb-quote-text: #5a5a6e;
+
+    /* —— 表格 —— */
+    --pb-table-border: #f3d7e8;
+    --pb-table-stripe: #fdf2f8;
+    --pb-table-head-bg: rgba(255, 121, 198, 0.7);   /* 表头粉底（70% 透明） */
+    --pb-table-head-text: #ffffff;
+}
+
+/* ======================= 基础 ======================= */
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; background: var(--pb-bg); }
+
+body {
+    font-family: var(--pb-font);
+    font-size: var(--pb-font-size);
+    line-height: var(--pb-line-height);
+    color: var(--pb-text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+.markdown-body {
+    position: relative;
+    z-index: 0;
+    width: var(--pb-width);          /* 宽度固定 */
+    min-height: var(--pb-min-height);/* 高度自适应，但有个最低值 */
+    margin: var(--pb-gap) auto;
+    padding: var(--pb-padding);
+    background: var(--pb-card-bg);
+    border-radius: var(--pb-radius);
+    box-shadow: var(--pb-shadow);
+    overflow-wrap: break-word;
+}
+
+/* OC 贴图：半透明铺在卡片底色上，文字浮于上层 */
+.markdown-body::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    background-image: var(--pb-bg-image);
+    background-repeat: no-repeat;
+    background-size: var(--pb-bg-image-size);
+    background-position: var(--pb-bg-image-position);
+    opacity: var(--pb-bg-image-opacity);
+    pointer-events: none;
+}
+
+.markdown-body > * {
+    position: relative;
+    z-index: 1;
+}
+
+/* ======================= 标题 ======================= */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--pb-heading);
+    line-height: 1.35;
+    margin: 1.4em 0 .6em;
+    font-weight: 700;
+}
+h1 {
+    font-size: 1.7em;
+    text-align: center;
+    border-bottom: 2px dashed var(--pb-accent);
+    padding-bottom: .4em;
+}
+h2 {
+    font-size: 1.35em;
+    border-left: 6px solid var(--pb-accent);
+    padding-left: 12px;
+}
+h3 { font-size: 1.15em; }
+h4, h5, h6 { font-size: 1em; }
+
+/* ======================= 正文 ======================= */
+p { margin: .8em 0; }
+
+a {
+    color: var(--pb-link);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(230, 73, 128, .35);
+}
+a:hover { border-bottom-color: var(--pb-link); }
+
+strong { color: #c2255c; }
+
+ul, ol { padding-left: 1.6em; margin: .8em 0; }
+li { margin: .25em 0; }
+
+hr {
+    border: none;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--pb-accent), transparent);
+    margin: 24px 0;
+}
+
+img {
+    max-width: 100%;
+    border-radius: 12px;
+    display: block;
+    margin: 12px auto;
+}
+
+/* ======================= 引用 ======================= */
+blockquote {
+    margin: 16px 0;
+    padding: 12px 16px;
+    background: var(--pb-quote-bg);
+    border-left: 4px solid var(--pb-quote-border);
+    border-radius: 0 10px 10px 0;
+    color: var(--pb-quote-text);
+}
+blockquote p { margin: .3em 0; }
+
+/* ======================= 代码 ======================= */
+code, kbd, samp {
+    font-family: var(--pb-font-mono);
+    font-size: .9em;
+}
+
+:not(pre) > code {
+    background: var(--pb-inline-bg);
+    color: var(--pb-inline-text);
+    padding: .15em .4em;
+    border-radius: 6px;
+}
+
+pre {
+    background: var(--pb-code-bg);
+    color: var(--pb-code-text);
+    padding: 16px;
+    border-radius: 12px;
+    overflow-x: auto;
+    margin: 16px 0;
+    line-height: 1.6;
+}
+/* Pygments 包裹层（.codehilite / .highlight）：只做圆角裁切，避免与 pre 双重内边距 */
+.codehilite, .highlight {
+    margin: 16px 0;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.codehilite pre, .highlight pre { margin: 0; }
+pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: .88em;
+}
+
+/* ======================= 表格 ======================= */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+    font-size: .95em;
+    border-radius: 10px;
+    overflow: hidden;
+}
+th, td {
+    border: 1px solid var(--pb-table-border);
+    padding: 8px 12px;
+    text-align: left;
+}
+thead th {
+    background: var(--pb-table-head-bg);
+    color: var(--pb-table-head-text);
+}
+tbody tr:nth-child(even) { background: var(--pb-table-stripe); }
+
+/* ======================= 任务列表 ======================= */
+.task-list-item { list-style: none; margin-left: -1.4em; }
+.task-list-item input[type="checkbox"] {
+    appearance: none;
+    width: 16px; height: 16px;
+    border: 2px solid var(--pb-accent);
+    border-radius: 5px;
+    margin-right: 6px;
+    vertical-align: -2px;
+    cursor: default;
+}
+.task-list-item input[type="checkbox"]:checked {
+    background: var(--pb-accent);
+    box-shadow: inset 0 0 0 3px var(--pb-card-bg);
+}
+
+/* ======================= 页眉 / 页脚（在卡片内） ======================= */
+.pb-header {
+    margin: 0 0 16px;
+    text-align: center;
+    color: var(--pb-accent);
+    font-weight: 700;
+    font-size: 1.05em;
+}
+
+.pb-footer {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 2px dashed var(--pb-accent);
+    text-align: center;
+    line-height: 1.7;
+}
+.pb-footer .line1 {
+    display: block;
+    color: var(--pb-muted);
+    font-size: .85em;
+    letter-spacing: 3px;
+}
+.pb-footer .line2 {
+    display: block;
+    margin-top: 4px;
+    color: var(--pb-accent);
+    font-size: .95em;
+    font-weight: 700;
+}

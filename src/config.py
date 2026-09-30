@@ -36,5 +36,20 @@ class Settings(BaseSettings):
     output_guard_enabled: bool = True
     output_guard_groups: list[str] = ["123456789"]
 
+    # ============ 渲染（文本 / Markdown → 图片） ============
+    # 卡片宽度（像素，固定）与截图缩放倍数（2 = 高清）
+    render_width: int = 720
+    render_scale: int = 2
+    # 浏览器来源：本地复用系统 Edge 用 msedge；搬服务器可改 chromium 或留空走内置
+    render_browser_channel: str = "msedge"
+    render_browser_path: str = ""
+    # OC 背景贴图：相对项目根目录或绝对路径，留空则不叠图
+    render_bg_image: str = ""
+    render_bg_image_opacity: float = 0.22
+    render_bg_image_size: str = "58%"
+    render_bg_image_position: str = "bottom right"
+    # 单次渲染超时（毫秒）
+    render_timeout_ms: int = 30000
+
 
 settings = Settings()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.core.database import dispose_db, init_db
+from src.core.render import shutdown_renderer
 from src.core.service import sync_plugin_info
 
 
@@ -13,4 +14,5 @@ async def on_startup() -> None:
 
 
 async def on_shutdown() -> None:
+    await shutdown_renderer()
     await dispose_db()
