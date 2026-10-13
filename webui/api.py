@@ -23,6 +23,7 @@ from webui.routes import commands as commands_routes
 from webui.routes import config as config_routes
 from webui.routes import database as database_routes
 from webui.routes import groups as groups_routes
+from webui.routes import llm as llm_routes
 from webui.routes import permissions as permissions_routes
 from webui.routes import plugins as plugins_routes
 from webui.routes import settings as settings_routes
@@ -42,6 +43,7 @@ PAGE_NAMES = (
     "config",
     "permissions",
     "plugins",
+    "llm",
     "database",
     "commands",
     "settings",
@@ -71,6 +73,7 @@ router.include_router(plugins_routes.router)
 router.include_router(permissions_routes.router)
 router.include_router(groups_routes.router)
 router.include_router(commands_routes.router)
+router.include_router(llm_routes.router)
 router.include_router(database_routes.router)
 router.include_router(settings_routes.router)
 

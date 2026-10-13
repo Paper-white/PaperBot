@@ -17,6 +17,7 @@
     { id: 'config', label: '系统配置', icon: '⚙️' },
     { id: 'permissions', label: '黑白名单', icon: '🚫' },
     { id: 'plugins', label: '插件管理', icon: '🧩' },
+    { id: 'llm', label: 'LLM 与记忆', icon: '🤖' },
     { id: 'database', label: '数据库管理', icon: '🗄️' },
     { id: 'commands', label: '命令管理', icon: '⌨️' },
     { id: 'settings', label: '设置', icon: '🛠️' },
@@ -1288,12 +1289,705 @@
     });
   }
 
+  /* ------------------------------------------------------------------ LLM 页 */
+  function optList(items, selected, placeholder) {
+    var head = placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '';
+    return (
+      head +
+      items
+        .map(function (item) {
+          return (
+            '<option value="' + esc(item.value) + '"' +
+            (String(item.value) === String(selected || '') ? ' selected' : '') + '>' +
+            esc(item.label) + '</option>'
+          );
+        })
+        .join('')
+    );
+  }
+
+  function pageLlm() {
+    return Promise.all([
+      api('/llm/status'),
+      api('/llm/providers'),
+      api('/llm/presets'),
+      api('/llm/sessions?limit=50'),
+      api('/llm/users?limit=50'),
+    ]).then(function (res) {
+      var st = res[0];
+      var prov = res[1];
+      var presets = res[2];
+      var sessions = res[3];
+      var users = res[4];
+
+      var active = st.active_provider;
+      var activeText = active
+        ? esc(active.name || 'env') + (active.virtual ? ' ' + badge('来自 .env', 'blue') : '')
+        : badge('未配置', 'amber');
+      var mask = st.secret_placeholder || '********';
+
+      var overview =
+        '<div class="grid">' +
+        stat('LLM', st.enable ? '已启用' : '已禁用', st.available ? '调用可用' : '未配置密钥 / 地址') +
+        stat('当前服务商', active ? (active.name || 'env') : '（无）', active ? esc(active.model || '默认模型') : '去下面新建一个吧') +
+        stat('人设', st.preset_count, '默认：' + (st.default_preset || '未设置')) +
+        stat('会话', st.session_count, '累计消息 ' + st.session_messages + ' 条') +
+        stat('用户记忆', st.profile_count, '印象 + 关键信息') +
+        stat('流式 / 记忆', (st.stream_enable ? '开' : '关') + ' / ' + (st.memory_enable ? '开' : '关'), '上下文 ' + st.context_rounds + ' 轮 · 每 ' + st.impression_every + ' 条提炼印象') +
+        '</div>' +
+        '<div class="error-box warn">服务商与人设都存在数据库里，<b>改完即时生效</b>；' +
+        '密钥只回显掩码，留着不动就不会被覆盖。若库里没有任何启用服务商，会回落到 ' +
+        '<span class="mono">.env</span> 的兜底配置（值 ' +
+        (st.env_base_url ? esc(st.env_model || st.env_base_url) : '未设置') + '）。</div>';
+
+      var provRows = prov.items.length
+        ? prov.items
+            .map(function (p) {
+              var actions = '<button class="btn ghost small" data-llm-prov-test="' + esc(p.name) + '">测试</button>';
+              if (!p.virtual) {
+                actions +=
+                  ' <button class="btn ghost small" data-llm-prov-edit="' + esc(p.name) + '">编辑</button>' +
+                  ' <button class="btn small danger" data-llm-prov-del="' + esc(p.name) + '">删除</button>';
+              }
+              return (
+                '<tr><td class="mono">' + esc(p.name) + ' ' +
+                (p.virtual ? badge('.env 兜底', 'blue') : '') + (p.is_default ? ' ' + badge('默认', 'pink') : '') +
+                '</td><td>' + (p.enabled ? badge('启用', 'green') : badge('停用', 'grey')) + '</td>' +
+                '<td class="mono hint">' + esc(p.base_url || '-') + '</td>' +
+                '<td class="mono">' + esc(p.model || '-') + '</td>' +
+                '<td>' + (p.api_key_set ? badge('已设置', 'green') : badge('未设置', 'amber')) + '</td>' +
+                '<td>' + actions + '</td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="6" class="hint">还没有服务商（当前只能靠 .env 兜底）</td></tr>';
+
+      var provCard = card(
+        '服务商',
+        '<div class="table-wrap"><table><thead><tr>' +
+          '<th>名称</th><th>状态</th><th>API 地址</th><th>模型</th><th>密钥</th><th>操作</th>' +
+          '</tr></thead><tbody>' + provRows + '</tbody></table></div>' +
+          '<div class="form-row spaced">' +
+          '<div class="field"><label>名称</label><input class="input" id="llm-prov-name" placeholder="如 deepseek"></div>' +
+          '<div class="field" style="flex:1;min-width:240px"><label>API 地址</label>' +
+          '<input class="input wide" id="llm-prov-url" placeholder="https://api.deepseek.com/v1"></div>' +
+          '<div class="field" style="flex:1;min-width:200px"><label>API Key</label>' +
+          '<input class="input wide" id="llm-prov-key" type="password" placeholder="留空 = 不改（新建时为空）" autocomplete="off"></div>' +
+          '<div class="field"><label>模型</label><input class="input" id="llm-prov-model" placeholder="deepseek-chat"></div>' +
+          '<div class="field"><label>温度</label><input class="input short" id="llm-prov-temp" placeholder="留空默认"></div>' +
+          '<div class="field"><label>设为默认</label><select class="input" id="llm-prov-default">' +
+          '<option value="1">是（推荐）</option><option value="0">否</option></select></div>' +
+          '<button class="btn" data-llm-prov-save>保存服务商</button>' +
+          '</div>' +
+          '<div class="hint spaced">「测试」会真实发一条 <span class="mono">ping</span> 并返回耗时；' +
+          '编辑时密钥留空 = 保持原值（要换就直接填新的）。</div>',
+        prov.count + ' 个（含 .env 兜底虚拟项）'
+      );
+
+      var presetOptions = optList(
+        presets.items.map(function (p) { return { value: p.name, label: p.display_name || p.name }; }),
+        '',
+        '（用全局默认人设）'
+      );
+
+      var chatCard = card(
+        '试聊（不带上下文）',
+        '<div class="form-row">' +
+          '<div class="field"><label>人设</label><select class="input" id="llm-chat-preset" style="min-width:160px">' +
+          presetOptions + '</select></div>' +
+          '<div class="field" style="flex:1;min-width:260px"><label>说点什么</label>' +
+          '<input class="input wide" id="llm-chat-prompt" placeholder="你好呀"></div>' +
+          '<button class="btn" data-llm-chat>发送</button>' +
+          '</div>' +
+          '<div id="llm-chat-result" class="spaced"></div>' +
+          '<div class="hint spaced">这条不会写进会话、也不碰记忆，纯用来验证服务商 / 人设配得对不对。' +
+          '密钥掩码占位是 <span class="mono">' + esc(mask) + '</span>。</div>'
+      );
+
+      var srcLabel = presets.source_labels || {};
+      var presetRows = presets.items.length
+        ? presets.items
+            .map(function (p) {
+              return (
+                '<tr><td class="mono">' + esc(p.name) + (p.name === st.default_preset ? ' ' + badge('默认', 'pink') : '') + '</td>' +
+                '<td>' + esc(p.display_name) + '</td>' +
+                '<td>' + badge(srcLabel[p.source] || p.source, p.source === 'manual' ? 'blue' : 'grey') + '</td>' +
+                '<td>' + (p.enabled ? badge('启用', 'green') : badge('停用', 'grey')) + '</td>' +
+                '<td class="hint">' + p.prompt_length + ' 字</td>' +
+                '<td class="hint">' + esc(p.updated_at || '-') + '</td>' +
+                '<td><button class="btn ghost small" data-llm-preset-edit="' + esc(p.name) + '">编辑</button>' +
+                ' <button class="btn ghost small" data-llm-preset-export="' + esc(p.name) + '">导出</button>' +
+                ' <button class="btn small danger" data-llm-preset-del="' + esc(p.name) + '">删除</button></td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="7" class="hint">还没有人设（插件里可以直接传 system prompt）</td></tr>';
+
+      var presetCard = card(
+        '人设',
+        '<div class="table-wrap"><table><thead><tr>' +
+          '<th>名字</th><th>显示名</th><th>来源</th><th>状态</th><th>提示词</th><th>更新</th><th>操作</th>' +
+          '</tr></thead><tbody>' + presetRows + '</tbody></table></div>' +
+          '<div class="error-box warn spaced">人设文件格式：<span class="mono">---</span> 包裹的 YAML 头（' +
+          '<span class="mono">name</span> / <span class="mono">display_name</span> / ' +
+          '<span class="mono">description</span> / <span class="mono">params</span>）后面接正文，正文即提示词。' +
+          'WebUI 改过的会标成「人工」，之后导入同名文件<b>不会</b>覆盖它。</div>' +
+          '<div class="form-row spaced">' +
+          '<div class="field"><label>名字（唯一键）</label><input class="input" id="llm-preset-name" placeholder="如 paper_white"></div>' +
+          '<div class="field"><label>显示名</label><input class="input" id="llm-preset-display" placeholder="白纸"></div>' +
+          '<div class="field" style="flex:1;min-width:200px"><label>简介</label>' +
+          '<input class="input wide" id="llm-preset-desc" placeholder="一句话介绍"></div>' +
+          '<div class="field"><label>状态</label><select class="input" id="llm-preset-enabled">' +
+          '<option value="1">启用</option><option value="0">停用</option></select></div>' +
+          '</div>' +
+          '<div class="field spaced"><label>系统提示词（正文）</label>' +
+          '<textarea class="input wide" id="llm-preset-prompt" rows="6" placeholder="你是…"></textarea></div>' +
+          '<div class="form-row spaced">' +
+          '<button class="btn" data-llm-preset-save>保存人设</button>' +
+          '<button class="btn ghost" data-llm-preset-reset>清空表单</button></div>' +
+          '<div class="field spaced"><label>导入人设文本</label>' +
+          '<textarea class="input wide" id="llm-preset-import" rows="4" placeholder="把 .md 内容粘进来，或下面选文件"></textarea></div>' +
+          '<div class="form-row spaced">' +
+          '<input type="file" id="llm-preset-file" accept=".md,.txt,.markdown">' +
+          '<div class="field"><label>同名已存在</label><select class="input" id="llm-preset-force">' +
+          '<option value="0">跳过（安全）</option><option value="1">强制覆盖</option></select></div>' +
+          '<button class="btn" data-llm-preset-import>导入</button>' +
+          '</div>',
+        presets.count + ' 个 · 默认「' + esc(st.default_preset || '未设置') + '」'
+      );
+
+      var sessionRows = sessions.items.length
+        ? sessions.items
+            .map(function (s) {
+              return (
+                '<tr><td>' + badge(s.scope_label, s.scope_type === 'group' ? 'blue' : 'pink') + '</td>' +
+                '<td class="mono">' + esc(s.scope_id) + '</td>' +
+                '<td class="mono dim">' + esc(s.plugin_name || '（共享）') + '</td>' +
+                '<td class="mono">' + esc(s.preset_name || '-') + '</td>' +
+                '<td class="mono dim">' + esc(s.provider_name || '-') + '</td>' +
+                '<td class="hint">' + s.message_count + ' 条（用户 ' + s.user_message_count + '）</td>' +
+                '<td class="hint">' + esc(s.updated_at || '-') + '</td>' +
+                '<td><button class="btn ghost small" data-llm-session-msg="' + s.id + '">消息</button>' +
+                ' <button class="btn ghost small" data-llm-session-set="' + s.id + '">换人设</button>' +
+                ' <button class="btn small danger" data-llm-session-del="' + s.id + '">清空</button></td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="8" class="hint">还没有会话（聊过天才会出现）</td></tr>';
+
+      var sessionCard = card(
+        '会话（上下文）',
+        '<div class="error-box warn">作用域就是「谁在聊」：<b>个人</b>是私聊 / 单人对话，' +
+        '<b>群聊</b>是整个群共享；<span class="mono">plugin_name</span> 为空表示各插件共用一个上下文，' +
+        '填了就是按插件隔离。清空只删聊天记录，不动长期记忆。</div>' +
+        '<div class="table-wrap"><table><thead><tr>' +
+          '<th>作用域</th><th>ID</th><th>插件</th><th>人设</th><th>服务商</th><th>消息</th><th>更新</th><th>操作</th>' +
+          '</tr></thead><tbody>' + sessionRows + '</tbody></table></div>' +
+        '<div id="llm-session-view" class="spaced"></div>',
+        sessions.count + ' 个（最多列 50）'
+      );
+
+      var userRows = users.items.length
+        ? users.items
+            .map(function (u) {
+              return (
+                '<tr><td class="mono">' + esc(u.user_id) + '</td>' +
+                '<td class="hint">' + u.message_count + ' 条</td>' +
+                '<td class="hint">' + esc((u.impression || '').slice(0, 40) || '（还没印象）') + '</td>' +
+                '<td class="hint">' + (u.fact_count || 0) + ' 条</td>' +
+                '<td class="hint">' + esc(u.updated_at || '-') + '</td>' +
+                '<td><button class="btn ghost small" data-llm-user-view="' + esc(u.user_id) + '">查看</button>' +
+                ' <button class="btn small danger" data-llm-user-del="' + esc(u.user_id) + '">清空记忆</button></td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="6" class="hint">还没有用户记忆</td></tr>';
+
+      var userCard = card(
+        '用户长期记忆',
+        '<div class="error-box warn">印象是攒够 ' + st.impression_every +
+        ' 条消息自动提炼的（受 <span class="mono">LLM_MEMORY_ENABLE</span> 控制）；关键信息可以自己加，' +
+        '自动提炼不会覆盖人工写的。最多注入 ' + st.max_facts + ' 条关键信息。</div>' +
+        '<div class="table-wrap"><table><thead><tr>' +
+          '<th>用户</th><th>消息</th><th>印象</th><th>关键信息</th><th>更新</th><th>操作</th>' +
+          '</tr></thead><tbody>' + userRows + '</tbody></table></div>' +
+        '<div class="form-row spaced">' +
+          '<div class="field"><label>用户 QQ</label><input class="input" id="llm-user-id" placeholder="如 10001"></div>' +
+          '<button class="btn ghost" data-llm-user-open>查看 / 编辑</button>' +
+        '</div>' +
+        '<div id="llm-user-view" class="spaced"></div>',
+        users.count + ' 位用户（最多列 50）'
+      );
+
+      var html = overview + provCard + chatCard + presetCard + sessionCard + userCard;
+      return html;
+
+    });
+  }
+
+  function fillProviderForm(root, p) {
+    root.querySelector('#llm-prov-name').value = p.name || '';
+    root.querySelector('#llm-prov-url').value = p.base_url || '';
+    root.querySelector('#llm-prov-key').value = p.api_key_set ? (p.api_key || '') : '';
+    root.querySelector('#llm-prov-model').value = p.model || '';
+    root.querySelector('#llm-prov-temp').value = p.temperature === null || p.temperature === undefined ? '' : p.temperature;
+    root.querySelector('#llm-prov-default').value = p.is_default ? '1' : '0';
+    toast('已载入「' + (p.name || '') + '」，密钥留空即保持原值', 'ok');
+  }
+
+  function fillPresetForm(root, name, d) {
+    root.querySelector('#llm-preset-name').value = name || '';
+    root.querySelector('#llm-preset-display').value = (d && d.display_name) || '';
+    root.querySelector('#llm-preset-desc').value = (d && d.description) || '';
+    root.querySelector('#llm-preset-prompt').value = (d && d.text) || '';
+    root.querySelector('#llm-preset-enabled').value = d && d.enabled === false ? '0' : '1';
+  }
+
+  function renderSessionMessages(root, box, id) {
+    box.innerHTML = '<div class="loading">读取中…</div>';
+    api('/llm/sessions/' + id + '/messages?limit=100')
+      .then(function (d) {
+        var s = d.session;
+        var rows = d.items.length
+          ? d.items
+              .map(function (m) {
+                return (
+                  '<tr><td class="mono">' + esc(m.role) + '</td><td class="hint">' + esc(m.created_at || '-') + '</td>' +
+                  '<td>' + esc(m.content || '').slice(0, 500) + '</td></tr>'
+                );
+              })
+              .join('')
+          : '<tr><td colspan="3" class="hint">这个会话还没消息</td></tr>';
+        box.innerHTML =
+          '<div class="card"><div class="card-head"><div>' +
+          '<div class="card-title">会话 #' + id + ' · ' + esc(s.scope_label) + ' ' + esc(s.scope_id) +
+          ' <span class="mono dim">' + esc(s.plugin_name || '（共享）') + '</span></div>' +
+          '<div class="card-note">人设 ' + esc(s.preset_name || '（全局默认）') + ' · 服务商 ' +
+          esc(s.provider_name || '（默认）') + ' · ' + s.message_count + ' 条</div>' +
+          '</div></div><div class="table-wrap"><table><thead><tr>' +
+          '<th>角色</th><th>时间</th><th>内容</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+      })
+      .catch(function (err) {
+        box.innerHTML = errorBox(err);
+      });
+  }
+
+  function renderSessionEditor(root, box, id) {
+    box.innerHTML = '<div class="loading">读取中…</div>';
+    api('/llm/presets').then(function (d) {
+      var opts = optList(
+        d.items.map(function (p) { return { value: p.name, label: p.display_name || p.name }; }),
+        '',
+        '（回落全局默认）'
+      );
+      box.innerHTML =
+        '<div class="error-box warn">给会话 #' + id + ' 单独指定人设 / 服务商（空 = 回落全局默认）。</div>' +
+        '<div class="form-row">' +
+        '<div class="field"><label>人设</label><select class="input" id="llm-sess-preset" style="min-width:160px">' + opts + '</select></div>' +
+        '<div class="field"><label>服务商名</label><input class="input" id="llm-sess-provider" placeholder="留空 = 默认"></div>' +
+        '<button class="btn" data-llm-session-save="' + id + '">保存</button>' +
+        '<button class="btn ghost" data-llm-session-cancel>收起</button></div>';
+    });
+  }
+
+  function renderUserView(root, box, uid) {
+    box.innerHTML = '<div class="loading">读取中…</div>';
+    api('/llm/users/' + encodeURIComponent(uid))
+      .then(function (d) {
+        var u = d.item;
+        var rows = u.facts.length
+          ? u.facts
+              .map(function (f) {
+                return (
+                  '<tr><td class="mono">' + esc(f.key) + '</td><td>' + esc(f.value) + '</td>' +
+                  '<td>' + badge(f.source, f.source === 'manual' ? 'blue' : 'grey') + '</td>' +
+                  '<td class="hint">' + esc(f.updated_at || '-') + '</td>' +
+                  '<td><button class="btn small danger" data-llm-fact-del="' + esc(uid) + '|' + esc(f.key) + '">删除</button></td></tr>'
+                );
+              })
+              .join('')
+          : '<tr><td colspan="5" class="hint">还没有关键信息</td></tr>';
+        box.innerHTML =
+          '<div class="card"><div class="card-head"><div>' +
+          '<div class="card-title">用户 ' + esc(uid) + '</div>' +
+          '<div class="card-note">累计 ' + u.message_count + ' 条消息 · 印象更新于 ' + esc(u.impression_at || '（未提炼）') + '</div>' +
+          '</div></div>' +
+          '<div class="field"><label>印象（给模型看的人物画像）</label>' +
+          '<textarea class="input wide" id="llm-user-impression" rows="4">' + esc(u.impression || '') + '</textarea></div>' +
+          '<div class="form-row spaced"><button class="btn" data-llm-imp-save="' + esc(uid) + '">保存印象</button>' +
+          '<button class="btn ghost" data-llm-user-close>收起</button></div>' +
+          '<div class="table-wrap spaced"><table><thead><tr>' +
+          '<th>键</th><th>值</th><th>来源</th><th>更新</th><th>操作</th></tr></thead><tbody>' + rows +
+          '</tbody></table></div>' +
+          '<div class="form-row spaced">' +
+          '<div class="field"><label>键</label><input class="input" id="llm-fact-key" placeholder="如 城市"></div>' +
+          '<div class="field" style="flex:1;min-width:200px"><label>值</label><input class="input wide" id="llm-fact-value" placeholder="如 杭州"></div>' +
+          '<button class="btn" data-llm-fact-add="' + esc(uid) + '">写入关键信息</button></div></div>';
+      })
+      .catch(function (err) {
+        box.innerHTML = errorBox(err);
+      });
+  }
+
+  function downloadText(filename, text) {
+    var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function afterLlm(root) {
+    function val(sel) {
+      var el = root.querySelector(sel);
+      return el ? el.value : '';
+    }
+
+    function each(sel, fn) {
+      root.querySelectorAll(sel).forEach(function (el) {
+        el.addEventListener('click', function () { fn(el); });
+      });
+    }
+
+    /* ---- 服务商 ---- */
+    var saveProv = root.querySelector('[data-llm-prov-save]');
+    if (saveProv) {
+      saveProv.addEventListener('click', function () {
+        var name = val('#llm-prov-name').trim();
+        if (!name) {
+          toast('先给服务商起个名字吧', 'err');
+          return;
+        }
+        var temp = val('#llm-prov-temp').trim();
+        var body = {
+          base_url: val('#llm-prov-url').trim(),
+          model: val('#llm-prov-model').trim(),
+          is_default: val('#llm-prov-default') === '1',
+        };
+        var keyValue = val('#llm-prov-key');
+        if (keyValue) body.api_key = keyValue; // 留空 = 不改动
+        if (temp) body.temperature = parseFloat(temp);
+        saveProv.disabled = true;
+        send('/llm/providers/' + encodeURIComponent(name), 'PUT', body)
+          .then(function (res) {
+            toast(res.message || '已保存', 'ok');
+            render();
+          })
+          .catch(function (err) {
+            toast('保存失败：' + err.message, 'err');
+            saveProv.disabled = false;
+          });
+      });
+    }
+
+    each('[data-llm-prov-edit]', function (btn) {
+      api('/llm/providers').then(function (d) {
+        var found = d.items.filter(function (p) { return p.name === btn.dataset.llmProvEdit; })[0];
+        if (found) fillProviderForm(root, found);
+      });
+    });
+
+    each('[data-llm-prov-test]', function (btn) {
+      var name = btn.dataset.llmProvTest;
+      btn.disabled = true;
+      toast('正在测试 ' + name + ' …');
+      send('/llm/providers/' + encodeURIComponent(name) + '/test', 'POST')
+        .then(function (res) {
+          toast(res.message + '：' + String(res.text || '').slice(0, 30), 'ok');
+          var box = root.querySelector('#llm-chat-result');
+          if (box) {
+            box.innerHTML =
+              '<div class="card"><div class="card-head"><div><div class="card-title">连接测试 · ' +
+              esc(res.provider || name) + '</div><div class="card-note">模型 ' + esc(res.model || '-') +
+              ' · 耗时 ' + res.elapsed_ms + 'ms</div></div></div><div class="card-body">' +
+              '<div class="mono">' + esc(res.text || '（空回复）') + '</div></div></div>';
+          }
+        })
+        .catch(function (err) {
+          toast('测试失败：' + err.message, 'err');
+        })
+        .then(function () { btn.disabled = false; });
+    });
+
+    each('[data-llm-prov-del]', function (btn) {
+      var name = btn.dataset.llmProvDel;
+      if (!window.confirm('删除服务商「' + name + '」？')) return;
+      send('/llm/providers/' + encodeURIComponent(name), 'DELETE')
+        .then(function (res) {
+          toast(res.message || '已删除', 'ok');
+          render();
+        })
+        .catch(function (err) { toast('删除失败：' + err.message, 'err'); });
+    });
+
+    /* ---- 试聊 ---- */
+    var chatBtn = root.querySelector('[data-llm-chat]');
+    if (chatBtn) {
+      chatBtn.addEventListener('click', function () {
+        var prompt = val('#llm-chat-prompt').trim();
+        if (!prompt) {
+          toast('先说点什么呀', 'err');
+          return;
+        }
+        var box = root.querySelector('#llm-chat-result');
+        box.innerHTML = '<div class="loading">等待模型回复…</div>';
+        chatBtn.disabled = true;
+        send('/llm/chat', 'POST', { prompt: prompt, preset: val('#llm-chat-preset') })
+          .then(function (res) {
+            box.innerHTML =
+              '<div class="card"><div class="card-head"><div><div class="card-title">回复</div>' +
+              '<div class="card-note">' + res.message + ' · ' + String(res.text || '').length + ' 字</div>' +
+              '</div></div><div class="card-body"><div class="markdown-like">' +
+              esc(res.text || '（空回复）') + '</div></div></div>';
+          })
+          .catch(function (err) {
+            box.innerHTML = errorBox(err);
+          })
+          .then(function () { chatBtn.disabled = false; });
+      });
+    }
+
+    /* ---- 人设 ---- */
+    var presetSave = root.querySelector('[data-llm-preset-save]');
+    if (presetSave) {
+      presetSave.addEventListener('click', function () {
+        var name = val('#llm-preset-name').trim();
+        if (!name) {
+          toast('人设名不能为空（插件里就是靠它引用的）', 'err');
+          return;
+        }
+        presetSave.disabled = true;
+        send('/llm/presets/' + encodeURIComponent(name), 'PUT', {
+          display_name: val('#llm-preset-display').trim(),
+          description: val('#llm-preset-desc').trim(),
+          system_prompt: val('#llm-preset-prompt'),
+          enabled: val('#llm-preset-enabled') === '1',
+        })
+          .then(function (res) {
+            toast(res.message || '已保存', 'ok');
+            render();
+          })
+          .catch(function (err) {
+            toast('保存失败：' + err.message, 'err');
+            presetSave.disabled = false;
+          });
+      });
+    }
+
+    var presetReset = root.querySelector('[data-llm-preset-reset]');
+    if (presetReset) {
+      presetReset.addEventListener('click', function () {
+        fillPresetForm(root, '', null);
+        toast('表单已清空，可以写新的人设啦');
+      });
+    }
+
+    each('[data-llm-preset-edit]', function (btn) {
+      var name = btn.dataset.llmPresetEdit;
+      api('/llm/presets/' + encodeURIComponent(name)).then(function (d) {
+        fillPresetForm(root, name, d.item);
+        toast('已载入人设「' + name + '」（' + (d.item.prompt_length || 0) + ' 字）', 'ok');
+      });
+    });
+
+    each('[data-llm-preset-export]', function (btn) {
+      var name = btn.dataset.llmPresetExport;
+      api('/llm/presets/' + encodeURIComponent(name) + '/export')
+        .then(function (text) {
+          downloadText(name + '.md', typeof text === 'string' ? text : JSON.stringify(text));
+          toast('已导出 ' + name + '.md', 'ok');
+        })
+        .catch(function (err) { toast('导出失败：' + err.message, 'err'); });
+    });
+
+    each('[data-llm-preset-del]', function (btn) {
+      var name = btn.dataset.llmPresetDel;
+      if (!window.confirm('删除人设「' + name + '」？引用了它的话会回落到全局默认。')) return;
+      send('/llm/presets/' + encodeURIComponent(name), 'DELETE')
+        .then(function (res) {
+          toast(res.message || '已删除', 'ok');
+          render();
+        })
+        .catch(function (err) { toast('删除失败：' + err.message, 'err'); });
+    });
+
+    var fileInput = root.querySelector('#llm-preset-file');
+    if (fileInput) {
+      fileInput.addEventListener('change', function () {
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          root.querySelector('#llm-preset-import').value = String(reader.result || '');
+          toast('已读入 ' + file.name, 'ok');
+        };
+        reader.readAsText(file, 'utf-8');
+      });
+    }
+
+    var importBtn = root.querySelector('[data-llm-preset-import]');
+    if (importBtn) {
+      importBtn.addEventListener('click', function () {
+        var text = val('#llm-preset-import');
+        if (!text.trim()) {
+          toast('先粘贴内容或选个文件吧', 'err');
+          return;
+        }
+        importBtn.disabled = true;
+        send('/llm/presets/import', 'POST', {
+          text: text,
+          filename: fileInput && fileInput.files[0] ? fileInput.files[0].name : '',
+          force: val('#llm-preset-force') === '1',
+        })
+          .then(function (res) {
+            toast(res.message || '导入完成', res.ok ? 'ok' : 'err');
+            if (res.ok) render();
+            else importBtn.disabled = false;
+          })
+          .catch(function (err) {
+            toast('导入失败：' + err.message, 'err');
+            importBtn.disabled = false;
+          });
+      });
+    }
+
+    /* ---- 会话 ---- */
+    var sessBox = root.querySelector('#llm-session-view');
+    each('[data-llm-session-msg]', function (btn) {
+      renderSessionMessages(root, sessBox, parseInt(btn.dataset.llmSessionMsg, 10));
+    });
+    each('[data-llm-session-set]', function (btn) {
+      renderSessionEditor(root, sessBox, parseInt(btn.dataset.llmSessionSet, 10));
+    });
+    each('[data-llm-session-del]', function (btn) {
+      var id = btn.dataset.llmSessionDel;
+      if (!window.confirm('清空会话 #' + id + ' 的聊天记录？（长期记忆不受影响）')) return;
+      send('/llm/sessions/' + id, 'DELETE')
+        .then(function (res) {
+          toast(res.message || '已清空', 'ok');
+          render();
+        })
+        .catch(function (err) { toast('清空失败：' + err.message, 'err'); });
+    });
+
+    /* ---- 用户记忆 ---- */
+    var userBox = root.querySelector('#llm-user-view');
+    each('[data-llm-user-view]', function (btn) {
+      renderUserView(root, userBox, btn.dataset.llmUserView);
+    });
+    var userOpen = root.querySelector('[data-llm-user-open]');
+    if (userOpen) {
+      userOpen.addEventListener('click', function () {
+        var uid = val('#llm-user-id').trim();
+        if (!uid) {
+          toast('填个 QQ 号吧', 'err');
+          return;
+        }
+        renderUserView(root, userBox, uid);
+      });
+    }
+    each('[data-llm-user-del]', function (btn) {
+      var uid = btn.dataset.llmUserDel;
+      if (!window.confirm('清空用户 ' + uid + ' 的印象与全部关键信息？')) return;
+      send('/llm/users/' + encodeURIComponent(uid), 'DELETE')
+        .then(function (res) {
+          toast(res.message || '已清空', 'ok');
+          render();
+        })
+        .catch(function (err) { toast('清空失败：' + err.message, 'err'); });
+    });
+
+    /* 动态区域里的按钮（用事件委托，渲染后依然有效） */
+    root.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.dataset) return;
+
+      if (t.dataset.llmSessionSave) {
+        var sid = t.dataset.llmSessionSave;
+        t.disabled = true;
+        send('/llm/sessions/' + sid, 'PUT', {
+          preset_name: val('#llm-sess-preset'),
+          provider_name: val('#llm-sess-provider').trim(),
+        })
+          .then(function (res) {
+            toast(res.message || '已更新', 'ok');
+            render();
+          })
+          .catch(function (err) {
+            toast('更新失败：' + err.message, 'err');
+            t.disabled = false;
+          });
+      }
+
+      if (t.dataset.llmSessionCancel || t.dataset.llmUserClose) {
+        (t.dataset.llmSessionCancel ? sessBox : userBox).innerHTML = '';
+      }
+
+      if (t.dataset.llmImpSave) {
+        var uid = t.dataset.llmImpSave;
+        t.disabled = true;
+        send('/llm/users/' + encodeURIComponent(uid) + '/impression', 'PUT', {
+          impression: val('#llm-user-impression'),
+        })
+          .then(function (res) {
+            toast(res.message || '印象已更新', 'ok');
+            t.disabled = false;
+          })
+          .catch(function (err) {
+            toast('保存失败：' + err.message, 'err');
+            t.disabled = false;
+          });
+      }
+
+      if (t.dataset.llmFactAdd) {
+        var fuid = t.dataset.llmFactAdd;
+        var key = val('#llm-fact-key').trim();
+        if (!key) {
+          toast('键不能为空', 'err');
+          return;
+        }
+        t.disabled = true;
+        send('/llm/users/' + encodeURIComponent(fuid) + '/facts', 'PUT', {
+          key: key,
+          value: val('#llm-fact-value'),
+        })
+          .then(function (res) {
+            toast(res.message || '已写入', 'ok');
+            renderUserView(root, userBox, fuid);
+          })
+          .catch(function (err) {
+            toast('写入失败：' + err.message, 'err');
+            t.disabled = false;
+          });
+      }
+
+      if (t.dataset.llmFactDel) {
+        var parts = String(t.dataset.llmFactDel).split('|');
+        var duid = parts[0];
+        var dkey = parts.slice(1).join('|');
+        if (!window.confirm('删除「' + dkey + '」？')) return;
+        send('/llm/users/' + encodeURIComponent(duid) + '/facts?key=' + encodeURIComponent(dkey), 'DELETE')
+          .then(function (res) {
+            toast(res.message || '已删除', 'ok');
+            renderUserView(root, userBox, duid);
+          })
+          .catch(function (err) { toast('删除失败：' + err.message, 'err'); });
+      }
+    });
+  }
+
   /* ------------------------------------------------------------ 路由与启动 */
+
   var PAGES = {
     status: pageStatus,
     config: pageConfig,
     permissions: pagePermissions,
     plugins: pagePlugins,
+    llm: pageLlm,
     database: pageDatabase,
     commands: pageCommands,
     settings: pageSettings,
@@ -1303,6 +1997,7 @@
     config: afterConfig,
     permissions: afterPermissions,
     plugins: afterPlugins,
+    llm: afterLlm,
     database: afterDatabase,
     commands: afterCommands,
     settings: afterSettings,
