@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     Integer,
     String,
     Text,
@@ -78,29 +79,9 @@ class PluginInfo(Base):
     )
 
 
-class PluginConfig(Base):
-    """插件级配置项（`plugin_name + key` 唯一）。
-
-    值统一按 JSON 文本存储（`pluginconf.dump_value` / `load_value`），
-    这样 str / int / bool / list 都能原样存取；**没有记录 = 用 schema 里的默认值**。
-    """
-
-    __tablename__ = "plugin_config"
-    __table_args__ = (
-        UniqueConstraint("plugin_name", "key", name="uq_plugin_config"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    plugin_name: Mapped[str] = mapped_column(String(64), index=True)
-    key: Mapped[str] = mapped_column(String(64), index=True)
-    value: Mapped[str] = mapped_column(Text, default="")
-    updated_by: Mapped[str] = mapped_column(String(64), default="")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
-
-    def __repr__(self) -> str:  # pragma: no cover - 调试用
-        return f"<PluginConfig {self.plugin_name}.{self.key}={self.value!r}>"
+# 插件级配置项**不再存库**：已迁到 `.config/<插件名>/config.json`
+# （见 `src/core/pluginconf.py`）。旧的 `plugin_config` 表在启动时会被一次性
+# 搬进 JSON 文件后改名归档，这里刻意不再声明 ORM 类。
 
 
 class PluginRule(Base):
@@ -196,3 +177,175 @@ class UserPermission(Base):
             f"<UserPermission {self.user_id} {self.scope_type}:{self.scope_id} "
             f"level={self.level}>"
         )
+
+# ============================ LLM（统一大模型服务） ============================
+# 说明：以下表由框架 src/core/llm.py 维护，插件**只调用接口**、不必直接读写；
+# WebUI「LLM」页可管理服务商 / 人设 / 用户印象与关键信息 / 会话。
+
+# 会话作用域（对话上下文按「个人 / 群聊」两种粒度隔离）
+LLM_SCOPE_USER = "user"
+LLM_SCOPE_GROUP = "group"
+LLM_SCOPES = (LLM_SCOPE_USER, LLM_SCOPE_GROUP)
+
+# 人设来源（内置示例 / 文件导入 / 面板手写）
+LLM_PRESET_BUILTIN = "builtin"
+LLM_PRESET_IMPORT = "import"
+LLM_PRESET_MANUAL = "manual"
+
+# 关键信息来源（LLM 自动提炼 / 人工维护）
+LLM_FACT_AUTO = "auto"
+LLM_FACT_MANUAL = "manual"
+
+
+class LlmProvider(Base):
+    """LLM 服务商配置（OpenAI 兼容，可存多套 + 指定默认）。
+
+    `extra` 是 JSON 文本，会原样透传给请求体（不必改代码就能传供应商特有参数）。
+    """
+
+    __tablename__ = "llm_provider"
+    __table_args__ = (UniqueConstraint("name", name="uq_llm_provider_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    base_url: Mapped[str] = mapped_column(String(256), default="")
+    api_key: Mapped[str] = mapped_column(String(256), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
+    temperature: Mapped[float] = mapped_column(Float, default=0.8)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    timeout: Mapped[float] = mapped_column(Float, default=60.0)
+    extra: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_by: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmProvider {self.name} model={self.model} default={self.is_default}>"
+
+
+class LlmPreset(Base):
+    """人设（角色卡）：`system_prompt` + 参数覆盖。
+
+    同名唯一，`source` 记录来源（内置 / 导入 / 手写），手改过的人设不会被导入覆盖。
+    """
+
+    __tablename__ = "llm_preset"
+    __table_args__ = (UniqueConstraint("name", name="uq_llm_preset_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    display_name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(String(512), default="")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    params: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(16), default=LLM_PRESET_MANUAL)
+    updated_by: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmPreset {self.name} source={self.source}>"
+
+
+class LlmSession(Base):
+    """对话会话（上下文容器）。
+
+    唯一键 `(scope_type, scope_id, plugin_name)`：
+    - `scope_type=user`  → scope_id 为 QQ 号（个人上下文）
+    - `scope_type=group` → scope_id 为群号（群聊上下文）
+    - `plugin_name` 用于「同一个人的上下文按插件隔离」，留空 = 各插件共享。
+    """
+
+    __tablename__ = "llm_session"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_type", "scope_id", "plugin_name", name="uq_llm_session"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scope_type: Mapped[str] = mapped_column(String(16), default=LLM_SCOPE_USER, index=True)
+    scope_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), default="", index=True)
+    preset_name: Mapped[str] = mapped_column(String(64), default="")
+    provider_name: Mapped[str] = mapped_column(String(64), default="")
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    user_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return (
+            f"<LlmSession {self.scope_type}:{self.scope_id} plugin={self.plugin_name!r} "
+            f"msgs={self.message_count}>"
+        )
+
+
+class LlmMessage(Base):
+    """会话消息（只存对话原文，role ∈ system/user/assistant/tool）。"""
+
+    __tablename__ = "llm_message"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    content: Mapped[str] = mapped_column(Text, default="")
+    name: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmMessage s{session_id} {self.role} {self.content[:20]!r}>"
+
+
+class LlmUserProfile(Base):
+    """用户印象（每个用户一条，由 LLM 从对话中提炼，可人工改写）。"""
+
+    __tablename__ = "llm_user_profile"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_llm_profile_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    impression: Mapped[str] = mapped_column(Text, default="")
+    # 提炼时该用户累计的（个人上下文）消息数，用于判断「有没有新料」
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    impression_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmUserProfile {self.user_id} {self.impression[:20]!r}>"
+
+
+class LlmUserFact(Base):
+    """用户关键信息（可枚举的事实条目，例：昵称 / 喜好 / 忌口）。
+
+    `(user_id, fact_key)` 唯一；`source=auto` 表示由 LLM 自动提炼，
+    `source=manual` 表示人工在 WebUI 里写的（自动提炼不会覆盖人工条目）。
+    """
+
+    __tablename__ = "llm_user_fact"
+    __table_args__ = (
+        UniqueConstraint("user_id", "fact_key", name="uq_llm_fact"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    fact_key: Mapped[str] = mapped_column(String(64), index=True)
+    fact_value: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(16), default=LLM_FACT_AUTO)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmUserFact {self.user_id} {self.fact_key}={self.fact_value[:20]!r}>"

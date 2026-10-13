@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from src.core import pluginconf
 from src.core import registry, reload as reload_mod, service
 from src.core.models import SCOPE_GLOBAL, SCOPE_TYPES
 from webui.deps import SECRET_PLACEHOLDER, mask_secret, require_token
@@ -87,6 +88,7 @@ async def get_plugin_config(name: str) -> dict:
 
     values = await service.plugin_config_values(name)
     stored = await service.plugin_config_stored(name)
+    meta = await service.plugin_config_meta(name)
 
     fields: list[dict] = []
     for field in feature.config_schema:
@@ -109,7 +111,11 @@ async def get_plugin_config(name: str) -> dict:
         "plugin": name,
         "fields": fields,
         "stored_keys": sorted(stored),
-        "note": "改动即时生效（无需重启）；值存 SQLite，删除记录即恢复默认值",
+        "path": str(pluginconf.config_file(name)),
+        "exists": pluginconf.config_file(name).is_file(),
+        "updated_by": meta.get("updated_by", ""),
+        "updated_at": meta.get("updated_at", ""),
+        "note": "改动即时生效（无需重启）；值存 .config/<插件名>/config.json，删掉键即恢复默认值",
     }
 
 

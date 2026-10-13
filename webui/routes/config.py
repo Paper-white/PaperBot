@@ -1,7 +1,7 @@
-"""系统配置接口：`/api/config`（读写 `.env`，敏感字段脱敏）。
+"""系统配置接口：`/api/config`（读写 `.config/main/.env`，敏感字段脱敏）。
 
-⚠️ 所有改动**写回 `.env` 文件**，需要**重启 Bot** 才会生效；
-写回前会自动备份为 `.env.bak`。
+⚠️ 所有改动**写回 `.config/main/.env`**，需要**重启 Bot** 才会生效；
+写回前会自动备份为同目录下的 `.env.bak`。
 """
 
 from __future__ import annotations
@@ -105,6 +105,30 @@ SECTIONS: list[dict[str, Any]] = [
         "note": "所有插件共享同一个 SQLite",
         "fields": [
             _field("DATABASE_URL", "连接串", hint="sqlite+aiosqlite:///data/paperbot.db"),
+        ],
+    },
+    {
+        "id": "llm",
+        "name": "LLM 兜底与行为",
+        "note": "服务商 / 人设建议在「LLM」页管理（存库、即时生效）；这里的 .env 配置只作兜底",
+        "fields": [
+            _field(
+                "LLM_ENABLE",
+                "启用 LLM",
+                "bool",
+                hint="关闭后所有 LLM 调用直接报错（插件会提示用不了）",
+            ),
+            _field("LLM_BASE_URL", "兜底 API 地址", hint="如 https://api.openai.com/v1"),
+            _field("LLM_API_KEY", "兜底 API Key", secret=True, hint="留空 = 只用库里的服务商"),
+            _field("LLM_MODEL", "兜底模型名"),
+            _field("LLM_DEFAULT_PRESET", "默认人设名", hint="未指定人设时用它，如 paper_white"),
+            _field("LLM_STREAM_ENABLE", "默认流式输出", "bool", hint="插件显式传 use_stream 时以插件为准"),
+            _field("LLM_MEMORY_ENABLE", "启用长期记忆", "bool", hint="关闭后不再注入印象 / 关键信息"),
+            _field("LLM_CONTEXT_ROUNDS", "上下文轮数", "int", hint="1 轮 = 用户 + 助手"),
+            _field("LLM_IMPRESSION_EVERY", "每 N 条消息提炼印象", "int"),
+            _field("LLM_MAX_FACTS", "最多注入几条关键信息", "int"),
+            _field("LLM_TIMEOUT", "请求超时（秒）", "float"),
+            _field("LLM_PROXY", "代理地址", hint="如 http://127.0.0.1:2080，留空直连"),
         ],
     },
     {
@@ -216,7 +240,7 @@ def render_sections(
 
 @router.get("/config")
 async def get_config() -> dict:
-    """读取 `.env` 并返回分组的配置项（敏感字段已脱敏）。"""
+    """读取 `.config/main/.env` 并返回分组的配置项（敏感字段已脱敏）。"""
     env = envfile.read_env()
     adapters = []
     for adapter in (QQ_ADAPTER, TELEGRAM_ADAPTER):
@@ -257,7 +281,7 @@ def _coerce(field: dict[str, Any], value: Any) -> Any:
 
 
 def _is_same_value(field: dict[str, Any], raw: Optional[str], coerced: Any) -> bool:
-    """判断新值与 `.env` 里的旧值是否等价（避免无意义的写盘与备份）。"""
+    """判断新值与配置文件里的旧值是否等价（避免无意义的写盘与备份）。"""
     if raw is None:
         return False
     kind = field["type"]
@@ -275,7 +299,7 @@ def _is_same_value(field: dict[str, Any], raw: Optional[str], coerced: Any) -> b
 
 @router.put("/config")
 async def put_config(payload: dict = Body(...)) -> dict:
-    """批量写回 `.env`（只处理出现过的键；敏感字段留空/占位则不改）。"""
+    """批量写回 `.config/main/.env`（只处理出现过的键；敏感字段留空/占位则不改）。"""
     values = payload.get("values")
     if not isinstance(values, dict) or not values:
         raise HTTPException(status_code=400, detail="values 不能为空")
@@ -313,12 +337,12 @@ async def put_config(payload: dict = Body(...)) -> dict:
     try:
         changed = envfile.write_env(updates)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"写入 .env 失败：{exc}") from exc
+        raise HTTPException(status_code=500, detail=f"写入 .config/main/.env 失败：{exc}") from exc
 
     return {
         "ok": True,
         "changed": changed,
         "backup": str(backup) if backup else "",
         "restart_required": True,
-        "message": "已写入 .env，需重启 Bot 生效",
+        "message": "已写入 .config/main/.env，需重启 Bot 生效",
     }

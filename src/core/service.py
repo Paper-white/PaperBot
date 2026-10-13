@@ -429,6 +429,11 @@ async def plugin_config_stored(plugin_name: str) -> dict:
     return await pluginconf.stored_config(plugin_name)
 
 
+async def plugin_config_meta(plugin_name: str) -> dict:
+    """只读配置文件的元信息（`updated_by` / `updated_at`）。"""
+    return await pluginconf.stored_meta(plugin_name)
+
+
 async def set_plugin_config(
     plugin_name: str, values: dict, updated_by: str = ""
 ) -> List[str]:

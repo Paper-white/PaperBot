@@ -2,6 +2,17 @@
 
 与 NoneBot2 的 `.env` 共用同一个文件，但这里只声明本项目自己关心的字段，
 `extra="ignore"` 保证不会因为 NoneBot 的其它环境变量而报错。
+
+## 配置文件位置（`.config/`，整个目录已 gitignore）
+
+```
+.config/
+├── main/.env          ← 框架自身配置（原根目录 .env；含密钥，不进版本库）
+└── <插件名>/config.json  ← 插件配置项（见 src/core/pluginconf.py）
+```
+
+⚠️ 根目录的 `.env` 仍被作为**低优先级兜底**读取（方便老环境平滑迁移）：
+`.config/main/.env` 的值会覆盖它。迁移完可以删掉根目录那个。
 """
 
 from __future__ import annotations
@@ -13,10 +24,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 项目根目录（src/ 的上一级）
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# 所有本地配置文件的大本营（含密钥 → 已 gitignore）
+CONFIG_DIR_NAME = ".config"
+MAIN_CONFIG_DIR_NAME = "main"
+# 框架自身配置（.env 风格）
+MAIN_ENV_PATH = f"{CONFIG_DIR_NAME}/{MAIN_CONFIG_DIR_NAME}/.env"
+# 兼容：老环境把 .env 放在根目录，优先级更低
+LEGACY_ENV_FILE = ".env"
+
+
+def config_dir() -> Path:
+    """`.config/` 根目录（不存在则创建）。"""
+    path = BASE_DIR / CONFIG_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def main_config_dir() -> Path:
+    """`.config/main/`（框架自身配置目录）。"""
+    path = config_dir() / MAIN_CONFIG_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # 先读老的根目录 .env，再读 .config/main/.env（后者覆盖前者）
+        env_file=(LEGACY_ENV_FILE, MAIN_ENV_PATH),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -71,6 +105,33 @@ class Settings(BaseSettings):
     render_bg_image_position: str = "bottom right"
     # 单次渲染超时（毫秒）
     render_timeout_ms: int = 30000
+
+    # ============ LLM（统一大模型服务） ============
+    # 总开关：关闭后所有插件调用 LLM 都会直接抛 LLMError（便于临时断网/省钱）
+    llm_enable: bool = True
+    # 兜底服务商配置（DB 里没有默认服务商时用它；只需 OpenAI 兼容即可）
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+    # 请求超时（秒）
+    llm_timeout: float = 60.0
+    # 访问外网用的代理（例：http://127.0.0.1:2080），留空则直连
+    llm_proxy: str = ""
+    # 采样参数默认值（0 表示该参数不传）
+    llm_temperature: float = 0.8
+    llm_max_tokens: int = 0
+    # 默认人设名（留空 = 不注入人设，只按 messages 原样请求）
+    llm_default_preset: str = ""
+    # 是否允许流式输出（全局开关；插件调用时可用 use_stream=True/False 再覆盖）
+    llm_stream_enable: bool = False
+    # 是否启用「用户印象 + 关键信息」长期记忆（个性化）
+    llm_memory_enable: bool = True
+    # 多轮上下文保留轮数（1 轮 = 一问一答；0 = 不带历史）
+    llm_context_rounds: int = 10
+    # 每累计 N 条用户消息，触发一次「印象 / 关键信息」提炼（<=0 关闭自动提炼）
+    llm_impression_every: int = 10
+    # 注入 prompt 的关键信息条数上限
+    llm_max_facts: int = 30
 
 
 settings = Settings()

@@ -2,7 +2,7 @@
 
 提供三件事：
 1. 版本信息（PaperBot / NoneBot / 适配器 / Python / 平台）；
-2. WebUI 访问令牌的查看状态与在线修改（写入 `.env` 并**立即生效**，无需重启）；
+2. WebUI 访问令牌的查看状态与在线修改（写入 `.config/main/.env` 并**立即生效**，无需重启）；
 3. 日志文件管理（列表、查看尾部、删除单个、清理全部）。
 """
 
@@ -135,7 +135,7 @@ async def get_settings() -> dict:
 # --------------------------------------------------------------------------- #
 @router.put("/settings/token")
 async def update_token(payload: TokenPayload) -> dict:
-    """写入 `.env` 的 `WEBUI_TOKEN` 并即时生效（无需重启）。"""
+    """写入 `.config/main/.env` 的 `WEBUI_TOKEN` 并即时生效（无需重启）。"""
     token = (payload.token or "").strip()
     if token and len(token) < MIN_TOKEN_LENGTH:
         raise HTTPException(
@@ -151,9 +151,9 @@ async def update_token(payload: TokenPayload) -> dict:
         }
 
     if not envfile.env_exists():
-        raise HTTPException(status_code=400, detail="未找到 .env，无法写入令牌")
+        raise HTTPException(status_code=400, detail="未找到 .config/main/.env，无法写入令牌（可先把根目录 .env 迁移过去）")
 
-    # 与 PUT /api/config 一致：写盘前先备份为 .env.bak
+    # 与 PUT /api/config 一致：写盘前先备份为 .env.bak（同目录）
     env_path = envfile.env_path()
     shutil.copyfile(env_path, env_path.with_name(env_path.name + ".bak"))
     changed = envfile.write_env({"WEBUI_TOKEN": token})

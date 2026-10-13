@@ -24,3 +24,5 @@ pip = "*"
 [tool.pixi.tasks]
 bot = "python bot.py"
 new-plugin = "python scripts/new_plugin.py"
+check-llm = "python scripts/llm_check.py"
+check-config = "python scripts/config_check.py"

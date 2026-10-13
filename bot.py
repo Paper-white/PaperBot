@@ -1,20 +1,26 @@
 """PaperBot 启动入口。
 
 启动流程：
-1. nonebot.init()（读取 .env）
+1. nonebot.init()（读 `.config/main/.env`；根目录老 .env 作为低优先级兜底）
 2. 挂日志文件输出（logs/ 下每次运行一个日志文件）
 3. 注册 OneBot v11 适配器
 4. 安装「消息输出守卫」（开发测试期锁死消息出口）
 5. 加载 plugins/ 下的所有功能插件（插件 import 时向框架注册 Feature）
 6. 注册启动/关闭钩子（建表 + 同步插件元信息）
 7. 挂载 WebUI 后端路由
+
+⚠️ 配置文件统一放在 `.config/`（整个目录已 gitignore）：
+   `.config/main/.env`（框架）+ `.config/<插件名>/config.json`（插件）。
+   根目录的 `.env` 会被 `_env_file` 自动当作低优先级兜底读取。
 """
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
-# 初始化 NoneBot（读取项目根目录的 .env）
-nonebot.init()
+from src.config import MAIN_ENV_PATH
+
+# 初始化 NoneBot（`.config/main/.env`；NoneBot 会自动把根 .env 作为更低优先级合并）
+nonebot.init(_env_file=MAIN_ENV_PATH)
 
 # 日志文件输出（越早越好，后面的启动过程都留痕）
 from src.core.logging import log_dir, setup_file_logging  # noqa: E402

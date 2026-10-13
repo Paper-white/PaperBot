@@ -3,7 +3,7 @@
 插件在 `Feature(..., config_schema=[...])` 里声明自己的配置字段，框架负责：
 
 1. 校验 schema 合法性（重复 key / 未知类型 / select 无选项等都直接报错）；
-2. 值存进共享表 `plugin_config`（`plugin_name + key` 唯一）；
+2. 值存进 **`.config/<插件名>/config.json`**（UTF-8、无 BOM、可直接手改）；
 3. 读值时**合并默认值**，所以插件代码永远能拿到完整字典；
 4. 在 WebUI「插件管理」页自动渲染表单（见 `webui/static/assets/app.js`）。
 
@@ -18,22 +18,70 @@
      "secret": False}        # 是否敏感字段（WebUI 脱敏显示）
 
 也可以偷懒写成字符串（等价于 `{"key": "greet"}`）。
+
+## 文件布局
+
+```
+.config/                     ← 整个目录已 gitignore（含密钥，不进版本库）
+├── main/.env                ← 框架自身配置（原来是根目录的 .env）
+└── <插件名>/
+    ├── config.json          ← 插件配置项（本模块读写）
+    └── ...                  ← 插件自己的其它文件（用 feature.config_dir 拿目录）
+```
+
+`config.json` 是**扁平结构**，只有**显式改过**的键才会出现（没写的键实时回落 schema 默认值，
+所以文件永远保持干净）；`_` 开头的键是框架保留的元信息，插件不要用::
+
+    {
+      "_plugin": "paperbot_echo",
+      "_updated_at": "2026-10-14 06:30:00",
+      "_updated_by": "webui",
+      "greet": "你好呀"
+    }
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import select
-
-from src.core.database import get_session
-from src.core.models import PluginConfig
+from src.config import config_dir  # `.config/` 根目录（项目根下）
 
 FIELD_TYPES = ("string", "text", "int", "float", "bool", "select")
 
+# `_` 开头的键是框架元信息，不算插件配置项
+META_PREFIX = "_"
+
 _TRUE_WORDS = {"true", "1", "yes", "y", "on", "是", "开"}
 _FALSE_WORDS = {"false", "0", "no", "n", "off", "否", "关"}
+
+
+# --------------------------------------------------------------------------- #
+# 路径
+# --------------------------------------------------------------------------- #
+def plugin_dir(plugin_name: str) -> Path:
+    """某插件的配置目录 `.config/<插件名>/`（不存在则创建）。
+
+    插件可以往这里放自己的文件（见 `Feature.config_dir`），
+    框架只负责 `config.json` 这一个文件。
+    """
+    name = (plugin_name or "").strip()
+    if not name:
+        raise ValueError("插件名不能为空")
+    # 防目录穿越：插件名只允许字母/数字/下划线/短横线/点
+    if not all(ch.isalnum() or ch in "_-." for ch in name) or name.startswith("."):
+        raise ValueError(f"插件名不能用于配置目录：{plugin_name!r}")
+    path = config_dir() / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def config_file(plugin_name: str) -> Path:
+    """某插件的配置文件 `.config/<插件名>/config.json`。"""
+    return plugin_dir(plugin_name) / "config.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -51,6 +99,8 @@ def normalize_schema(schema: Optional[Iterable[Any]]) -> list[dict[str, Any]]:
         key = str(raw.get("key") or "").strip()
         if not key:
             raise ValueError("config_schema 字段缺少 key")
+        if key.startswith(META_PREFIX):
+            raise ValueError(f"config_schema[{key}]: key 不能以 {META_PREFIX!r} 开头（是框架保留前缀）")
 
         type_ = str(raw.get("type") or "string").strip().lower()
         if type_ not in FIELD_TYPES:
@@ -135,32 +185,60 @@ def coerce(field: dict[str, Any], value: Any) -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# 值序列化
+# 文件读写
 # --------------------------------------------------------------------------- #
-def dump_value(value: Any) -> str:
+def _now_text() -> str:
+    """当前北京时间字符串（给 `_updated_at` 用，与 LLM 页展示口径一致）。"""
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone(timedelta(hours=8))).isoformat(sep=" ", timespec="seconds")
+
+
+def read_file(plugin_name: str) -> dict[str, Any]:
+    """读 `config.json` 的**原始内容**（含 `_` 元信息）。
+
+    文件不存在 / 内容损坏 / 不是 JSON 对象 → 返回空字典（并保留坏文件不覆盖）。
+    """
+    path = config_file(plugin_name)
+    if not path.is_file():
+        return {}
     try:
-        return json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return json.dumps(str(value), ensure_ascii=False)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def load_value(raw: Optional[str]) -> Any:
-    if raw is None:
-        return None
+def _values_of(data: dict[str, Any]) -> dict[str, Any]:
+    """从文件内容里挑出「配置项」（丢掉 `_` 元信息）。"""
+    return {k: v for k, v in data.items() if not str(k).startswith(META_PREFIX)}
+
+
+def _write_file(plugin_name: str, data: dict[str, Any]) -> None:
+    """原子写 `config.json`（先写临时文件再 replace，避免写坏）。
+
+    值全部为空时**删除文件**（等价于「什么都没改过」，保持目录干净）。
+    """
+    path = config_file(plugin_name)
+    payload = {k: v for k, v in data.items() if not str(k).startswith(META_PREFIX)}
+    if not payload:
+        path.unlink(missing_ok=True)
+        return
+
+    text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".config-", suffix=".tmp")
     try:
-        return json.loads(raw)
-    except (TypeError, ValueError):
-        return raw
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fp:
+            fp.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 # --------------------------------------------------------------------------- #
-# 存储读写
+# 对外 API（service / WebUI / 启动流程用）
 # --------------------------------------------------------------------------- #
-async def _rows(session, plugin_name: str) -> list[PluginConfig]:
-    stmt = select(PluginConfig).where(PluginConfig.plugin_name == plugin_name)
-    return list((await session.execute(stmt)).scalars().all())
-
-
 async def load_config(plugin_name: str) -> dict[str, Any]:
     """读某插件的配置（已合并默认值）。插件不存在或没配过也会返回完整字典。"""
     from src.core import registry  # 延迟导入，避免循环依赖
@@ -169,17 +247,32 @@ async def load_config(plugin_name: str) -> dict[str, Any]:
     schema = feature.config_schema if feature is not None else []
     values = {f["key"]: default_value(f) for f in schema}
 
-    async with get_session(readonly=True) as session:
-        for row in await _rows(session, plugin_name):
-            if row.key in values:
-                values[row.key] = load_value(row.value)
+    stored = _values_of(read_file(plugin_name))
+    index = field_index(schema)
+    for key, raw in stored.items():
+        if key in index:
+            # 手改过的文件里类型可能不对，按 schema 兜一层（错了就用默认值）
+            try:
+                values[key] = coerce(index[key], raw)
+            except ValueError:
+                values[key] = default_value(index[key])
+        elif not schema:
+            values[key] = raw  # 插件还没注册（罕见）：原样带出，便于排查
     return values
 
 
 async def stored_config(plugin_name: str) -> dict[str, Any]:
     """只读「显式存过的」键值（不含默认值），供展示「是否被改过」。"""
-    async with get_session(readonly=True) as session:
-        return {row.key: load_value(row.value) for row in await _rows(session, plugin_name)}
+    return _values_of(read_file(plugin_name))
+
+
+async def stored_meta(plugin_name: str) -> dict[str, Any]:
+    """只读文件里的元信息（`_updated_by` / `_updated_at`）。"""
+    data = read_file(plugin_name)
+    return {
+        "updated_by": str(data.get("_updated_by") or ""),
+        "updated_at": str(data.get("_updated_at") or ""),
+    }
 
 
 async def write_config(
@@ -203,29 +296,22 @@ async def write_config(
             continue
         validated[key] = coerce(field, raw)
 
+    data = read_file(plugin_name)
+    existing = _values_of(data)
+
     changed: list[str] = []
-    async with get_session() as session:
-        existing = {row.key: row for row in await _rows(session, plugin_name)}
-        for key, value in validated.items():
-            row = existing.get(key)
-            if row is None:
-                session.add(
-                    PluginConfig(
-                        plugin_name=plugin_name,
-                        key=key,
-                        value=dump_value(value),
-                        updated_by=updated_by,
-                    )
-                )
-                changed.append(key)
-                continue
-            if load_value(row.value) == value:
-                continue
-            row.value = dump_value(value)
-            row.updated_by = updated_by
-            changed.append(key)
+    for key, value in validated.items():
+        if key in existing and existing[key] == value:
+            continue
+        existing[key] = value
+        changed.append(key)
 
     if changed:
+        data.update(existing)
+        data["_plugin"] = plugin_name
+        data["_updated_by"] = updated_by
+        data["_updated_at"] = _now_text()
+        _write_file(plugin_name, data)
         await feature.load_config()  # 刷新插件侧缓存，立即生效
     return changed
 
@@ -234,13 +320,83 @@ async def clear_config(plugin_name: str, key: Optional[str] = None) -> int:
     """删除某插件的配置项（key=None 表示全部清空，退回默认值），返回删除条数。"""
     from src.core import registry
 
-    async with get_session() as session:
-        rows = await _rows(session, plugin_name)
-        targets = [r for r in rows if key is None or r.key == key]
-        for row in targets:
-            await session.delete(row)
+    data = read_file(plugin_name)
+    existing = _values_of(data)
+    targets = [k for k in existing if key is None or k == key]
+    if not targets:
+        return 0
+
+    for k in targets:
+        existing.pop(k, None)
+    meta = {k: v for k, v in data.items() if str(k).startswith(META_PREFIX)}
+    new_data = {**meta, **existing}
+    if existing:
+        new_data["_updated_by"] = "webui"
+        new_data["_updated_at"] = _now_text()
+    _write_file(plugin_name, new_data)
 
     feature = registry.get(plugin_name)
-    if feature is not None and targets:
+    if feature is not None:
         await feature.load_config()
     return len(targets)
+
+
+async def clear_plugin_files(plugin_name: str) -> int:
+    """删除某插件的整个配置目录（含插件自己放的文件），返回删除的文件数。"""
+    path = plugin_dir(plugin_name)
+    removed = 0
+    for item in path.glob("**/*"):
+        if item.is_file():
+            item.unlink(missing_ok=True)
+            removed += 1
+    # 目录本身保留（插件可能马上又要写）
+    return removed
+
+
+def migrate_legacy_rows(rows: Iterable[Any]) -> dict[str, int]:
+    """把旧 `plugin_config` 表的行搬进 JSON 文件（一次性迁移，同步执行）。
+
+    `rows` 是带 `plugin_name` / `key` / `value` / `updated_by` 属性的对象序列。
+    返回 {插件名: 迁移条数}。
+    """
+    moved: dict[str, int] = {}
+    for row in rows:
+        name = str(getattr(row, "plugin_name", "") or "")
+        key = str(getattr(row, "key", "") or "")
+        if not name or not key:
+            continue
+        try:
+            raw = json.loads(getattr(row, "value", "") or "null")
+        except (TypeError, ValueError):
+            raw = getattr(row, "value", "")
+        data = read_file(name)
+        data.update(_values_of(data))
+        if key in data and data[key] == raw:
+            continue
+        data[key] = raw
+        data["_plugin"] = name
+        data["_updated_by"] = str(getattr(row, "updated_by", "") or "legacy")
+        data["_updated_at"] = _now_text()
+        _write_file(name, data)
+        moved[name] = moved.get(name, 0) + 1
+    return moved
+
+
+__all__ = [
+    "FIELD_TYPES",
+    "META_PREFIX",
+    "clear_config",
+    "clear_plugin_files",
+    "coerce",
+    "config_file",
+    "default_value",
+    "field_index",
+    "load_config",
+    "migrate_legacy_rows",
+    "normalize_schema",
+    "plugin_dir",
+    "read_file",
+    "stored_config",
+    "stored_meta",
+    "write_config",
+]

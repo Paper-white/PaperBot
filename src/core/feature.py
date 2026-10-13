@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import nonebot
@@ -131,6 +132,8 @@ class Feature:
         }
         # 带插件名前缀的统一 logger
         self.logger: PrefixedLogger = get_logger(name)
+        # LLM 门面（懒加载）
+        self._llm: Any = None
         # 记录定义它的模块，供热重载定位
         caller = sys._getframe(1)
         self.module_name: str = caller.f_globals.get("__name__", "")
@@ -150,9 +153,39 @@ class Feature:
         """当前配置缓存（未加载时只有默认值）。"""
         return dict(self._config_cache)
 
+    @property
+    def config_dir(self) -> Path:
+        """本插件的配置目录 `.config/<插件名>/`（不存在会自动创建）。
+
+        `config_schema` 声明的配置项由框架负责存在该目录的 `config.json` 里；
+        插件自己需要的其它文件（名单、缓存、导出数据…）也请放在这里，
+        整个 `.config/` 已 gitignore，不会污染版本库。
+        """
+        return pluginconf.plugin_dir(self.name)
+
     def cfg(self, key: str, default: Any = None) -> Any:
         """读一个配置项（同步，用缓存值）。"""
         return self._config_cache.get(key, default)
+
+    # ------------------------------------------------------------------ #
+    # LLM 门面（统一 LLM 服务，见 docs/llm.md）
+    # ------------------------------------------------------------------ #
+    @property
+    def llm(self):
+        """本插件的 LLM 门面（懒加载，避免没用到 LLM 的插件也 import openai）。
+
+        用法：
+
+            text = await feature.llm.ask("你好", scope="user", scope_id=str(event.get_user_id()))
+            async for chunk in feature.llm.stream("讲个故事"):
+                ...
+            await feature.llm.remember(user_id, "怎么称呼", "白纸姐姐")
+        """
+        if self._llm is None:
+            from src.core.llm import get_plugin_llm
+
+            self._llm = get_plugin_llm(self.name)
+        return self._llm
 
     # ------------------------------------------------------------------ #
     # 生命周期钩子（装饰器）

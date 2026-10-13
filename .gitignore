@@ -9,7 +9,8 @@ __pycache__/
 # pixi 环境
 .pixi/
 
-# 本地配置 / 密钥
+# 本地配置 / 密钥（框架配置在 .config/main/.env，插件配置在 .config/<插件名>/）
+.config/
 .env
 .env.bak
 
