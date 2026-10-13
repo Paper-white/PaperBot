@@ -1,6 +1,7 @@
 # PaperBot 插件开发协议与规则
 
-> 面向**功能插件作者**的规范文档。框架内部实现（门控 / 守卫 / 加载器细节）见 `AGENTS.md`。
+> 面向**功能插件作者**的规范文档。框架内部实现（门控 / 守卫 / 加载器细节）见
+> [`architecture.md`](architecture.md)；文档总入口见 [`index.md`](index.md)。
 > 本文与代码同步维护，改动框架对外接口时请顺手更新。
 
 ---
@@ -28,6 +29,8 @@ pixi run bot
 | **不要自己 `Driver.on_startup`** | 用 `@feature.on_load` 等生命周期钩子 |
 | **日志用 `feature.logger`** | 自动带 `[插件名]` 前缀 |
 | **要发消息前想想守卫** | 群白名单 `BOT_ACTIVE_GROUPS` 之外的群、私聊一律被拦 |
+| **配置走 `config_schema`** | 值存 `.config/<插件名>/config.json`（已 gitignore），别自己写根目录文件 |
+| **自己的文件放 `feature.config_dir`** | 非配置类的持久化文件也统一扔进这个目录 |
 
 ---
 
@@ -179,7 +182,7 @@ cmd = feature.command("weather", level=LEVEL_USER, description="查询天气")
 
 ## 6. 插件级配置项（`config_schema`）
 
-对标 AstrBot 的 `_conf_schema.json`：插件声明字段，框架负责**校验 + 存库 + WebUI 自动渲染表单**。
+对标 AstrBot 的 `_conf_schema.json`：插件声明字段，框架负责**校验 + 存 JSON 文件 + WebUI 自动渲染表单**。
 
 ```python
 feature = Feature(
@@ -218,7 +221,8 @@ await feature.load_config()                # 手动刷新缓存
 
 ### 存储与生效
 
-- 值存共享表 `plugin_config`（`plugin_name + key` 唯一，值以 JSON 文本存），**唯一键无记录 = 用默认值**；
+- 值存 **`.config/<插件名>/config.json`**（UTF-8、无 BOM、可直接手改），**只写显式改过的键** = 没写的键实时回落默认值；
+- 文件里 `_` 开头的键是框架元信息（`_plugin` / `_updated_by` / `_updated_at`），插件**不要**用 `_` 开头当配置键；
 - WebUI「插件管理」页每个插件下方自动出现「插件配置项」卡片，含「保存配置 / 恢复默认」；
 - 保存后框架会**立即刷新插件缓存**（`await feature.load_config()`），所以 `feature.cfg(...)` 立刻拿到新值；
 - 直接在插件代码里也可以读写：
@@ -227,6 +231,21 @@ await feature.load_config()                # 手动刷新缓存
   await pluginconf.write_config("paperbot_weather", {"city": "杭州"}, updated_by="plugin")
   ```
   但**普通场景推荐把可调参数都放进 `config_schema`**，让管理员在 WebUI 改。
+
+### 插件自己的文件放哪（`feature.config_dir`）
+
+`config_schema` 只管声明式的配置项；插件如果需要额外的持久化文件（名单、缓存、导出数据…），
+统一放到自己的配置目录里：
+
+```python
+path = feature.config_dir / "watchlist.json"   # → .config/paperbot_xxx/watchlist.json
+path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+```
+
+- 目录不存在会自动创建；整个 `.config/` **已 gitignore**，不会污染版本库；
+- 目录名 = 插件注册名（只允许字母/数字/`_`/`-`/`.`，`..`、`/`、`.` 开头会被拒绝）；
+- 手改 `config.json` 后，下次读配置（重启 / 热重载 / WebUI 保存）就会生效；
+  类型写错了不会炸，会**回落默认值**。
 
 ### 首个读配置的时机
 
@@ -332,7 +351,7 @@ async with get_session(readonly=True) as session:   # 纯读路径（不 commit�
 - SQLite 已开 WAL + `busy_timeout`，多个插件并发读写没问题；
 - ⚠️ `create_all` **只建新表、不给已有表补列**：插件表后来加了字段，老库不会自动 ALTER
   （框架自带表有这样一条「启动自动补列」兜底逻辑，插件表请自己处理，例如直接删掉旧库重来）；
-- ⚠️ 热重载时若模块里定义了 ORM 表，框架会自动把旧表从 metadata 摘掉再重试一次（见 §13）。
+- ⚠️ 热重载时若模块里定义了 ORM 表，框架会自动把旧表从 metadata 摘掉再重试一次（见 §14）。
 
 ---
 
@@ -353,7 +372,50 @@ await cmd.finish(MessageSegment.image(png))     # 发图
 
 ---
 
-## 12. 消息输出守卫（必须知道）
+## 12. 调用大模型（`feature.llm`）
+
+框架内置统一 LLM 服务（`src/core/llm.py`），插件**不用**自己读配置、自己建 `openai` client、自己拼记忆：
+
+```python
+@cmd.handle()
+async def _(event: MessageEvent, args=CommandArg()):
+    text = args.extract_plain_text().strip() or "你好"
+    if not await feature.llm.available():
+        await cmd.finish("还没配置大模型哦（.env 或 WebUI「LLM 与记忆」页）")
+    try:
+        reply = await feature.llm.ask(text)
+    except LLMError as exc:            # from src.core.llm import LLMError
+        feature.logger.warning("LLM 调用失败：{}", exc)
+        await cmd.finish("模型开小差了，稍后再试……")
+    await cmd.finish(reply)
+```
+
+常用接口（完整清单见 `docs/llm.md` 第 3 章）：
+
+| 方法 | 说明 |
+|---|---|
+| `await feature.llm.available()` | 是否已配置可用（建议先判断） |
+| `await feature.llm.ask(text, **kw)` | 返回字符串 |
+| `await feature.llm.complete(text, **kw)` | `ask` 的别名 |
+| `await feature.llm.chat(messages, **kw)` | 传消息列表，返回 `LLMResult`（含用量 / 耗时 / 模型） |
+| `feature.llm.stream(source, **kw)` | 异步生成器，`chunk.delta` 增量、`done=True` 那片带完整文本 |
+| `await feature.llm.remember/forget/profile(user_id, ...)` | 人工记 / 删 / 读某用户的长期记忆 |
+| `await feature.llm.use_preset/use_provider(scope, scope_id, 名字)` | 给某会话换人设 / 换服务商 |
+| `await feature.llm.clear_context(scope, scope_id)` | 清掉某作用域的历史 |
+
+关键参数：`scope="user"` + `scope_id=QQ`（个人上下文 + 长期记忆）、`scope="group"` + `scope_id=群号`
+（群上下文，不注入个人记忆）、都不传 = 无状态单次问答（不落库）；`preset=` / `provider=` / `model=` /
+`temperature=` / `max_tokens=` / `extra={...}` 临时覆盖；`memory=False` 关这一次的记忆注入。
+
+- **上下文自动按 `(作用域, 谁, 插件名)` 隔离**，用 `feature.llm` 会自动带上插件名，不会串到别的插件。
+- 传了 `scope` 就必须给 `scope_id`，指定的人设若不存在会直接抛 `LLMError`（不静默用错人设）。
+- 所有失败统一抛 `LLMError`（已包装成人话），插件只需 `try/except LLMError`。
+- 记忆类方法（`remember` / `profile` …）只读写数据库，`LLM_ENABLE=false` 时也能用。
+- 人设文件放在 `src/core/presets/*.md`（front-matter + 正文 = system prompt），也可以让用户在 WebUI 里写。
+
+---
+
+## 13. 消息输出守卫（必须知道）
 
 框架在 `Bot.call_api` 层锁死了消息出口（`src/core/guard.py`）：
 
@@ -369,7 +431,7 @@ await cmd.finish(MessageSegment.image(png))     # 发图
 
 ---
 
-## 13. 热重载
+## 14. 热重载
 
 WebUI「插件管理」页有「热重载」按钮（`POST /api/plugins/{name}/reload`），流程：
 
@@ -388,7 +450,7 @@ WebUI「插件管理」页有「热重载」按钮（`POST /api/plugins/{name}/r
 
 ---
 
-## 14. 提交前检查清单
+## 15. 提交前检查清单
 
 - [ ] 目录/文件名 = 插件注册名，`Feature(...)` 在模块顶层
 - [ ] 每条命令都有 `description=`，并按需填 `level=`
@@ -401,7 +463,7 @@ WebUI「插件管理」页有「热重载」按钮（`POST /api/plugins/{name}/r
 
 ---
 
-## 15. 常见坑
+## 16. 常见坑
 
 | 现象 | 原因 / 对策 |
 |---|---|
@@ -415,9 +477,10 @@ WebUI「插件管理」页有「热重载」按钮（`POST /api/plugins/{name}/r
 
 ---
 
-## 16. 参考
+## 17. 参考
 
 - NoneBot2 文档：<https://nonebot.dev>
 - OneBot v11 标准：<https://github.com/botuniverse/onebot-11>
-- 框架内部实现与踩坑：`AGENTS.md`
+- 框架内部实现与设计取舍：[`architecture.md`](architecture.md)
+- 开发环境 / 自检 / 踩坑备忘：[`development.md`](development.md)
 - 示例插件：`plugins/paperbot_echo/paperbot_echo.py`（含配置项 / 钩子 / 日志完整示例）
