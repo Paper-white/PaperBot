@@ -101,7 +101,7 @@ PaperBot/
 ├── plugins/                    # ★ 功能插件（一插件一文件夹，目录名 = 插件注册名）
 │   ├── paperbot_console/       #   总控插件：启停 / 权限 / 黑名单
 │   ├── paperbot_chat/          #   人设对话插件（LLM + 记忆）
-│   └── paperbot_echo/          #   示例插件（复读）
+│   └── paperbot_ping/          #   在线状态测试插件（%ping → pong）
 │
 ├── src/
 │   ├── config.py               # 项目配置（pydantic-settings）
@@ -222,7 +222,7 @@ PaperBot/
 | `%plugin <插件名>` | 查看插件在各作用域的开关状态【所有者】 |
 | `%admin add\|del\|black\|unblack <QQ>` | 管理员与黑名单管理【所有者】 |
 | `%ai <内容>` | 与 AI 人设对话（`%ai 群` / `%ai 流式` / `%ai 印象` / `%ai 记住` / `%ai 重置` / `%ai 人设` / `%ai 状态`） |
-| `%echo <内容>` | 示例插件：复读 |
+| `%ping` | 在线状态测试（回复 pong） |
 
 ---
 

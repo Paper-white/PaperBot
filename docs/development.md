@@ -63,7 +63,7 @@ async def main():
     from src.core import database
     await database.init_db()
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/plugins/paperbot_echo/config")
+        r = await client.get("/plugins/paperbot_ping/config")
         ...
     await database.dispose_db()
 ```

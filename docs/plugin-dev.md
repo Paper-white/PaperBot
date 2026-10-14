@@ -483,4 +483,4 @@ WebUI「插件管理」页有「热重载」按钮（`POST /api/plugins/{name}/r
 - OneBot v11 标准：<https://github.com/botuniverse/onebot-11>
 - 框架内部实现与设计取舍：[`architecture.md`](architecture.md)
 - 开发环境 / 自检 / 踩坑备忘：[`development.md`](development.md)
-- 示例插件：`plugins/paperbot_echo/paperbot_echo.py`（含配置项 / 钩子 / 日志完整示例）
+- 示例插件：`plugins/paperbot_ping/paperbot_ping.py`（含钩子 / 日志完整示例）

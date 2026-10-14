@@ -5,8 +5,8 @@
     plugins/
     ├── paperbot_console/               # 插件目录（建议 paperbot_ 前缀）
     │   └── paperbot_console.py         # 插件具体代码文件
-    └── paperbot_echo/
-        └── paperbot_echo.py
+    └── paperbot_ping/
+        └── paperbot_ping.py
 
 也兼容以下两种写法：
 - 目录内放 ``__init__.py``（标准包写法）；
@@ -37,7 +37,7 @@ DEFAULT_PLUGINS_DIR = "plugins"
 
 
 def _iter_plugin_modules(root: Path) -> list[str]:
-    """扫描插件目录，返回可导入的模块名列表（如 ``plugins.paperbot_echo.paperbot_echo``）。"""
+    """扫描插件目录，返回可导入的模块名列表（如 ``plugins.paperbot_ping.paperbot_ping``）。"""
     modules: list[str] = []
     if not root.is_dir():
         logger.warning(f"插件目录不存在：{root}")

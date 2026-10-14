@@ -33,7 +33,7 @@
 所以文件永远保持干净）；`_` 开头的键是框架保留的元信息，插件不要用::
 
     {
-      "_plugin": "paperbot_echo",
+      "_plugin": "paperbot_ping",
       "_updated_at": "2026-10-14 06:30:00",
       "_updated_by": "webui",
       "greet": "你好呀"
