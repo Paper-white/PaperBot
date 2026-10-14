@@ -2,7 +2,7 @@
 
 - 状态：已完成
 - 开始：2026-09-30
-- 相关文件：`src/core/llm.py`、`src/core/presets/`、`webui/routes/llm.py`、`plugins/paperbot_chat/`、`scripts/llm_check.py`
+- 相关文件：`src/core/llm.py`、`src/core/presets/`、`webui/routes/llm.py`、`plugins/paperbot_chat/`、`_tests/llm_check.py`
 - 相关文档：[`../llm.md`](../llm.md)（使用与开发指南，长期维护）
 
 ## 目标
@@ -41,7 +41,7 @@
 - [x] 门面 `PluginLLM`（`feature.llm.ask(...)`），统一异常 `LLMError`
 - [x] WebUI 第 8 页「LLM 与记忆」（5 张卡片 + 试聊）
 - [x] 演示插件 `paperbot_chat`（`%ai` 系列命令）
-- [x] 自检 `scripts/llm_check.py`（`pixi run check-llm`，86 项，含真实 SDK 链路）
+- [x] 自检 `_tests/llm_check.py`（`pixi run check-llm`，86 项，含真实 SDK 链路）
 
 ## 人设覆盖规则（容易忘）
 

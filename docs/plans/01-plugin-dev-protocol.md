@@ -48,5 +48,5 @@
 ## 遗留 / 后续
 
 - 早期自检脚本（`plugindev_check.py` 96 项等）放在 `%TEMP%\opencode\`，**已被系统清理**；
-  改动这块时建议临时重写一个同样的自检跑一遍（长期入口只有 `scripts/config_check.py` 与 `scripts/llm_check.py`）
+  改动这块时建议临时重写一个同样的自检跑一遍（长期入口只有 `_tests/config_check.py` 与 `_tests/llm_check.py`）
 - `docs/plugin-dev.md` 与代码同步维护：**改框架对外接口时顺手更新它**

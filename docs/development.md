@@ -1,6 +1,6 @@
 # 开发指南
 
-- 相关文件：`pyproject.toml`、`scripts/`、`src/core/*`
+- 相关文件：`pyproject.toml`、`_tests/`、`src/core/*`
 - 相关文档：[`architecture.md`](architecture.md)、[`plugin-dev.md`](plugin-dev.md)、[`plans/`](plans/)
 
 ## 1. 环境
@@ -31,12 +31,13 @@ D:\pixi\bin\pixi.exe add --pypi <package>
 | `pixi run new-plugin <名字>` | 生成插件骨架（`--desc` / `--command` / `--author` / `--force`） |
 | `pixi run check-config` | **配置体系自检**（92 项：schema / JSON 读写 / 目录穿越 / 接口 / env 迁移） |
 | `pixi run check-llm` | **LLM 服务自检**（86 项，含真实 `openai` SDK 打本地假服务） |
+| `pixi run check-vcs` | **版本控制自检**（27 项：临时 git 仓库演练 fetch / update / 脏拒绝 / 回滚 / 接口） |
 
 ⚠️ **必须从项目根目录启动**：`bot.py` 用相对路径找 `.config/main/.env`、`data/`、`logs/`。
 
 ## 3. 自检脚本怎么写
 
-长期复用的自检脚本放 `scripts/`（并在 `pyproject.toml` 注册 task）。套路：
+长期复用的自检脚本放 `_tests/`（并在 `pyproject.toml` 注册 task）；插件脚手架等开发工具放 `scripts/`。套路：
 
 ```python
 import os, sys, tempfile

@@ -2,7 +2,7 @@
 
 - 状态：已完成
 - 开始：2026-10-14
-- 相关文件：`src/core/vcs.py`、`webui/routes/version.py`、`scripts/vcs_check.py`、`src/config.py`
+- 相关文件：`src/core/vcs.py`、`webui/routes/version.py`、`_tests/vcs_check.py`、`src/config.py`
 - 相关文档：[`docs/api.md`](../api.md)、[`docs/deploy.md`](../deploy.md)、[`docs/configuration.md`](../configuration.md)
 
 ## 目标
@@ -55,7 +55,7 @@
 - [x] `webui/routes/version.py`：`GET /version`、`POST /version/fetch|update|restart`
 - [x] `webui/api.py` 注册 `version` router
 - [x] `webui/static/assets/app.js`：设置页「版本控制」卡片 + 交互
-- [x] `scripts/vcs_check.py` 自检脚本（pixi task `check-vcs`），**27/27 通过**
+- [x] `_tests/vcs_check.py` 自检脚本（pixi task `check-vcs`），**27/27 通过**
 - [x] 文档：本文件 + `plans/README.md` + `roadmap.md` + `api.md` + `deploy.md` + `configuration.md` + `README.md`
 
 ## 实现要点

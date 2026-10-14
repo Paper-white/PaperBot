@@ -2,7 +2,7 @@
 
 - 状态：已完成
 - 开始：2026-10-13
-- 相关文件：`src/config.py`、`src/core/pluginconf.py`、`webui/envfile.py`、`bot.py`、`scripts/config_check.py`
+- 相关文件：`src/config.py`、`src/core/pluginconf.py`、`webui/envfile.py`、`bot.py`、`_tests/config_check.py`
 - 相关文档：[`../plugin-dev.md`](../plugin-dev.md) §插件级配置项
 
 ## 目标
@@ -47,7 +47,7 @@
 - [x] `Feature.config_dir` property（插件放自己文件的地方，自动创建）
 - [x] WebUI 插件配置接口加 `path` / `exists` / `updated_by` / `updated_at`
 - [x] `.gitignore` 加 `.config/`
-- [x] 自检 `scripts/config_check.py`（`pixi run check-config`，92 项）
+- [x] 自检 `_tests/config_check.py`（`pixi run check-config`，92 项）
 - [x] 真机验证：PUT 中文配置 → 磁盘 JSON（无 BOM）+ 即时生效 + 删键回默认 + 全清删文件
 
 ## 踩坑记录

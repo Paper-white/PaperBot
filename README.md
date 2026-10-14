@@ -133,8 +133,10 @@ PaperBot/
 │   ├── routes/                 #   各页面接口
 │   └── static/                 #   零构建前端
 │
-├── scripts/                    # 开发脚本
-│   ├── new_plugin.py           #   插件脚手架（pixi run new-plugin）
+├── scripts/                    # 开发工具
+│   └── new_plugin.py           #   插件脚手架（pixi run new-plugin）
+│
+├── _tests/                     # 自检脚本（pixi run check-*）
 │   ├── config_check.py         #   配置体系自检（pixi run check-config）
 │   ├── llm_check.py            #   LLM 服务自检（pixi run check-llm）
 │   └── vcs_check.py            #   版本控制自检（pixi run check-vcs）

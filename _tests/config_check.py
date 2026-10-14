@@ -21,7 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 让脚本能直接 `python scripts/config_check.py` 跑
+# 让脚本能直接 `python _tests/config_check.py` 跑
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import nonebot  # noqa: E402
