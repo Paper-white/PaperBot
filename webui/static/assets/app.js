@@ -1114,8 +1114,116 @@
   }
 
   /* ---------------------------------------------------------------- 设置页 */
+
+  /* 版本控制卡片（独立请求，取不到也不影响设置页其它内容） */
+  function versionCardHtml(vc) {
+    if (!vc || !vc.enabled) {
+      return card(
+        '版本控制',
+        empty('版本控制功能已关闭（VCS_ENABLE=false）'),
+        '🔄 一键拉取云端版本'
+      );
+    }
+
+    var svc = vc.service || {};
+    var svcBadge =
+      svc.state === 'running'
+        ? badge('运行中', 'green')
+        : svc.state === 'none'
+        ? badge('未配置', 'grey')
+        : badge(svc.state || '未知', 'amber');
+
+    if (!vc.available) {
+      return card(
+        '版本控制',
+        kv([
+          ['状态', badge(vc.reason || '不可用', 'red')],
+          ['Git', vc.git_version ? esc(vc.git_version) : badge('未安装', 'red')],
+          ['守护服务', svcBadge + ' <span class="hint">' + esc(svc.detail || '') + '</span>'],
+        ]),
+        '🔄 一键拉取云端版本'
+      );
+    }
+
+    var dirtyState = vc.dirty
+      ? badge('有 ' + vc.dirty_files.length + ' 处未提交改动', 'red')
+      : badge('干净', 'green');
+    var syncState = vc.compare_unknown
+      ? badge('未知（尚未拉取）', 'grey')
+      : vc.behind > 0
+      ? badge('落后 ' + vc.behind + ' 个提交', 'amber')
+      : vc.ahead > 0
+      ? badge('领先 ' + vc.ahead + ' 个提交', 'blue')
+      : badge('已是最新', 'green');
+
+    var dirtyWarn = vc.dirty
+      ? '<div class="error-box warn">工作区有未提交改动，已禁用更新（生产环境请勿手改代码，' +
+        '请在本地改好并 push 后再更新）。文件：<span class="mono">' +
+        esc(vc.dirty_files.slice(0, 5).join('、')) +
+        (vc.dirty_files.length > 5 ? ' 等' : '') +
+        '</span></div>'
+      : '';
+
+    var body =
+      kv([
+        ['当前版本', '<span class="mono">' + esc(vc.commit || '-') + '</span> ' +
+          badge('分支 ' + esc(vc.branch), 'grey')],
+        ['工作区', dirtyState],
+        ['与远程', syncState],
+        ['远程', '<span class="mono">' + esc(vc.remote_url || vc.remote) + '</span>'],
+        ['守护服务', svcBadge + ' <span class="hint">' + esc(svc.detail || '') + '</span>'],
+        ['Git', esc(vc.git_version || '未知')],
+      ]) +
+      dirtyWarn +
+      '<div class="form-row spaced">' +
+        '<button class="btn ghost" id="vc-check">检查更新</button>' +
+        '<button class="btn" id="vc-update"' + (vc.dirty ? ' disabled' : '') + '>更新到最新</button>' +
+        '<button class="btn danger" id="vc-restart">重启 Bot</button>' +
+      '</div>' +
+      '<div id="vc-commits" class="spaced"></div>' +
+      '<div class="hint spaced">更新后需<b>重启</b>才生效（框架代码无法热重载）。' +
+      '当前重启模式：<span class="mono">' + esc(vc.restart_mode) + '</span>' +
+      '（spawn = 自己拉起；exit = 交给守护进程）。</div>';
+
+    return card('版本控制', body, '🔄 一键拉取云端版本（只拉不推）');
+  }
+
+  function renderVersionCommits(root, data) {
+    var box = root.querySelector('#vc-commits');
+    if (!box) return;
+    var items = data.commits || [];
+    if (!items.length) {
+      box.innerHTML = empty('没有提交记录');
+      return;
+    }
+    var rows = items
+      .map(function (c) {
+        return (
+          '<tr><td><input type="radio" name="vc-commit" value="' + esc(c.hash) + '"></td>' +
+          '<td class="mono">' + esc(c.short) + '</td>' +
+          '<td class="hint">' + esc((c.date || '').replace('T', ' ').slice(0, 19)) + '</td>' +
+          '<td class="hint">' + esc(c.author) + '</td>' +
+          '<td>' + esc(c.subject) + '</td></tr>'
+        );
+      })
+      .join('');
+    box.innerHTML =
+      '<div class="card"><div class="card-head"><div>' +
+      '<div class="card-title">提交历史 · ' + esc(data.message || '') + '</div>' +
+      '<div class="card-note">选中一条提交后点右侧按钮即可切换（可用于回滚）</div>' +
+      '</div><button class="btn small" id="vc-switch">切换到此版本</button></div>' +
+      '<div class="table-wrap"><table><thead><tr>' +
+      '<th></th><th>commit</th><th>时间</th><th>作者</th><th>说明</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+
   function pageSettings() {
-    return api('/settings').then(function (d) {
+    return Promise.all([
+      api('/settings'),
+      api('/version').catch(function () { return null; }),
+    ]).then(function (res) {
+      var d = res[0];
+      var vc = res[1];
       var v = d.version;
       var r = d.runtime;
       var logs = d.logs;
@@ -1212,12 +1320,13 @@
           'WebUI 令牌不在这里改，见上方卡片（可即时生效）。</div>' + sectionCards
         : '';
 
-      return versionCard + runtimeCard + sectionBox + tokenCard + logCard;
+      return versionCard + runtimeCard + versionCardHtml(vc) + sectionBox + tokenCard + logCard;
     });
   }
 
   function afterSettings(root) {
     bindConfigSaves(root);
+    bindVersionActions(root);
 
     var saveBtn = root.querySelector('#save-token');
     if (saveBtn) {
@@ -1287,6 +1396,87 @@
           });
       });
     });
+  }
+
+  /* 版本控制按钮组：检查更新 / 更新到最新 / 切换版本 / 重启 */
+  function bindVersionActions(root) {
+    var checkBtn = root.querySelector('#vc-check');
+    if (checkBtn) {
+      checkBtn.addEventListener('click', function () {
+        checkBtn.disabled = true;
+        toast('正在拉取远程版本…');
+        send('/version/fetch', 'POST')
+          .then(function (data) {
+            renderVersionCommits(root, data);
+            toast(data.message || '已检查更新', 'ok');
+            // 刷新状态卡片上的「落后 / 领先」显示（避免整页闪烁，只更新按钮区）
+            var updateBtn = root.querySelector('#vc-update');
+            if (updateBtn) updateBtn.disabled = false;
+          })
+          .catch(function (err) {
+            toast('检查更新失败：' + err.message, 'err');
+          })
+          .then(function () {
+            checkBtn.disabled = false;
+          });
+      });
+    }
+
+    var updateBtn = root.querySelector('#vc-update');
+    if (updateBtn) {
+      updateBtn.addEventListener('click', function () {
+        if (!confirm('确认更新到 origin/main 最新版本？（更新后需重启才生效）')) return;
+        updateBtn.disabled = true;
+        send('/version/update', 'POST', {})
+          .then(function (res) {
+            var tip = res.message || '已更新';
+            if (res.deps_changed) tip += '；依赖有变化，请手动执行 pixi install';
+            toast(tip, 'ok');
+            render();
+          })
+          .catch(function (err) {
+            toast('更新失败：' + err.message, 'err');
+            updateBtn.disabled = false;
+          });
+      });
+    }
+
+    // 事件委托：提交历史里的「切换到此版本」动态渲染，用委托更稳
+    root.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.id || t.id !== 'vc-switch') return;
+      var picked = root.querySelector('input[name="vc-commit"]:checked');
+      if (!picked) return toast('请先选一条提交', 'err');
+      if (!confirm('确认切换到 ' + picked.value.slice(0, 7) + '？（可用于回滚，更新后需重启生效）')) return;
+      t.disabled = true;
+      send('/version/update', 'POST', { commit: picked.value })
+        .then(function (res) {
+          var tip = res.message || '已切换';
+          if (res.deps_changed) tip += '；依赖有变化，请手动执行 pixi install';
+          toast(tip, 'ok');
+          render();
+        })
+        .catch(function (err) {
+          toast('切换失败：' + err.message, 'err');
+          t.disabled = false;
+        });
+    });
+
+    var restartBtn = root.querySelector('#vc-restart');
+    if (restartBtn) {
+      restartBtn.addEventListener('click', function () {
+        if (!confirm('确认重启 Bot？（当前页面会短暂断开，稍后刷新即可）')) return;
+        restartBtn.disabled = true;
+        send('/version/restart', 'POST')
+          .then(function (res) {
+            toast(res.message || '正在重启…', 'ok');
+          })
+          .catch(function () {
+            // 进程重启会让请求中断，属正常现象
+            toast('进程正在重启，请稍后刷新页面', 'ok');
+          });
+      });
+    }
   }
 
   /* ------------------------------------------------------------------ LLM 页 */

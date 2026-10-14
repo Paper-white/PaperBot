@@ -52,3 +52,4 @@
 | [`02-llm-service.md`](02-llm-service.md) | 统一 LLM 服务（多服务商 / 人设 / 会话 / 记忆 / 流式） | 已完成 |
 | [`03-config-consolidation.md`](03-config-consolidation.md) | 配置集中化（`.config/` + 插件配置改 JSON） | 已完成 |
 | [`04-backlog.md`](04-backlog.md) | 待办与想法池（零散的、还没立成计划的） | 进行中 |
+| [`05-version-control.md`](05-version-control.md) | 框架版本控制（WebUI 一键拉取云端版本 + 重启） | 已完成 |

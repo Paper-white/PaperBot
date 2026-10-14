@@ -133,6 +133,24 @@ class Settings(BaseSettings):
     # 注入 prompt 的关键信息条数上限
     llm_max_facts: int = 30
 
+    # ============ 版本控制（WebUI 设置页「一键更新」，见 src/core/vcs.py） ============
+    # 用途：本地开发机 push → 服务器生产环境在 WebUI 点一下拉取最新代码
+    # （只拉不推，且绝不碰 .config/ data/ logs/ 这些已 gitignore 的目录）
+    vcs_enable: bool = True
+    # 远程名与跟踪分支
+    vcs_remote: str = "origin"
+    vcs_branch: str = "main"
+    # 远程地址：留空 = 用仓库已有的 origin；首次部署可填公开仓库 HTTPS 地址
+    vcs_remote_url: str = ""
+    # fetch 时使用的代理（如 http://127.0.0.1:2080），留空则直连
+    vcs_proxy: str = ""
+    # 提交历史展示条数
+    vcs_log_limit: int = 30
+    # 重启模式：spawn = 自己拉起新进程（开箱即用）；exit = 只退出，交给 systemd/NSSM 守护进程拉起
+    vcs_restart_mode: str = "spawn"
+    # 守护服务名（如 paperbot.service / PaperBot），留空则不检测守护状态
+    vcs_service_name: str = ""
+
 
 settings = Settings()
 

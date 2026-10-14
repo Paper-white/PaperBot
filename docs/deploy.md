@@ -97,6 +97,54 @@ WantedBy=multi-user.target
 > ⚠️ `WorkingDirectory` 必须是项目根目录（相对路径依赖）。
 > 首次部署记得跑一次 `pixi install` 和（如需出图）`playwright install chromium`。
 
+### 3.1 守护服务（推荐，配合一键更新）
+
+把 Bot 注册成系统服务并设置**崩溃自动拉起**，既能让它常驻，也能配合 WebUI「一键更新」：
+
+**Linux（systemd）**——`/etc/systemd/system/paperbot.service`：
+
+```ini
+[Service]
+Restart=always          # ← 进程退出即自动拉起（含一键更新后的主动退出）
+RestartSec=5
+```
+
+启用：`systemctl enable --now paperbot`。之后在 `.config/main/.env` 里设
+`VCS_RESTART_MODE=exit` 与 `VCS_SERVICE_NAME=paperbot.service`，WebUI 即可显示守护状态。
+
+**Windows（NSSM）**：
+
+```powershell
+nssm install PaperBot .\.pixi\envs\default\python.exe bot.py
+nssm set PaperBot AppDirectory .
+nssm set PaperBot AppExit Default Restart    # 退出即重启
+nssm start PaperBot
+```
+
+对应 `.env` 设 `VCS_RESTART_MODE=exit` 与 `VCS_SERVICE_NAME=PaperBot`。
+
+> 若不想配守护进程，保持 `VCS_RESTART_MODE=spawn`（默认）即可：WebUI 点「重启 Bot」时
+> 会由一个 detached 小助手在 3 秒后拉起新进程，**开箱即用**；区别是它只在主动重启时生效，
+> 不会像守护进程那样在崩溃后自愈。
+
+## 3.5 更新部署（WebUI 一键拉取云端版本）
+
+正式环境更新流程：
+
+1. **本地开发机**：改好代码 → `git commit` → `git push`
+2. **服务器生产环境**：打开 WebUI「**设置**」页 → 「版本控制」卡片：
+   - 点「**检查更新**」→ 拉取 `origin/main`，看到落后几个提交与提交历史
+   - 点「**更新到最新**」→ 对齐到最新版本（或选中某条提交后「切换到此版本」回滚）
+   - 点「**重启 Bot**」→ 让新代码生效（守护模式下会自动拉起）
+3. 若更新提示「**依赖有变化**」，在服务器执行一次 `pixi install` 后再重启
+
+约束与保障：
+
+- **只拉不推**，只追 `origin/main`
+- 更新前**工作区必须是干净的**（有未提交改动会被拒绝）——生产环境请勿手改代码
+- `.config/`（含密钥）、`data/`（数据库）、`logs/` 都已 gitignore，更新**不会碰**
+- 相关配置见 [`configuration.md`](configuration.md#17-版本控制一键拉取云端版本)
+
 ## 4. 反向代理 / 对外暴露
 
 WebUI 默认只监听 `127.0.0.1:6188`。要远程访问：

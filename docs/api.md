@@ -77,6 +77,12 @@ PUT    /api/settings/token                               改 WEBUI_TOKEN（写 .
 GET    /api/settings/logs/{name}?lines=                  读日志尾部（1~500 行）
 DELETE /api/settings/logs                                清理全部日志（删历史 + 清空当前）
 DELETE /api/settings/logs/{name}                         删除单个日志（当前运行中的 → 409）
+
+# ---- 版本控制（一键拉取云端版本） ----
+GET    /api/version                                      仓库状态（commit / 分支 / 脏 / 落后领先 / 守护服务）
+POST   /api/version/fetch                                拉取 origin/main（不改工作区），返回提交历史
+POST   /api/version/update                               {commit?} 对齐工作区（空 = 最新；脏工作区 409）
+POST   /api/version/restart                              重启 Bot（spawn 自拉起 / exit 交守护进程）
 ```
 
 ## 行为约定
@@ -90,3 +96,7 @@ DELETE /api/settings/logs/{name}                         删除单个日志（�
 - ⚠️ **没有 `GET /api/llm/providers/{name}`** 这种单条读取接口（只有列表 + PUT/DELETE/test）：
   请求它会返回 **405 Method Not Allowed** 而不是 404 —— 写测试时别拿 404 当「不存在」的判据
 - 密钥一律不回显真值：服务商密钥用掩码（提交掩码 = 不改动），敏感字段只显示长度
+- **版本控制**（`/api/version*`，见 [`plans/05-version-control.md`](plans/05-version-control.md)）：
+  工作区脏 → **409**（拒绝更新）；commit 非法 / 不存在 / 未 `fetch` → **400**；
+  `VCS_ENABLE=false` 时 `fetch`/`update`/`restart` → **400**；git 超时 → **504**；
+  **只拉不推**，只追 `origin/main`，绝不 `git clean`（`.config/` 等忽略目录不会被动）

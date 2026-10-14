@@ -49,6 +49,7 @@
 | `src/core/pluginconf.py` | 插件级配置项（schema 规范化 / 类型转换 / `.config/<插件名>/config.json` 读写） |
 | `src/core/hooks.py` | 生命周期钩子分发（三种签名兼容） |
 | `src/core/version.py` | 框架版本 + `requires` 校验 |
+| `src/core/vcs.py` | 框架版本控制（git 拉取 / 更新 / 重启 / 守护服务检测） |
 | `src/core/reload.py` | 插件热重载（`importlib.reload` + matcher / 命令前缀清理 + 失败回滚） |
 | `src/core/logger.py` | 统一日志出口（`PrefixedLogger` 自动加 `[插件名] ` 前缀） |
 | `src/core/logging.py` | 日志文件输出（每次运行一个文件 + 查看 / 清理） |

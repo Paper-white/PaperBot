@@ -136,7 +136,8 @@ PaperBot/
 ├── scripts/                    # 开发脚本
 │   ├── new_plugin.py           #   插件脚手架（pixi run new-plugin）
 │   ├── config_check.py         #   配置体系自检（pixi run check-config）
-│   └── llm_check.py            #   LLM 服务自检（pixi run check-llm）
+│   ├── llm_check.py            #   LLM 服务自检（pixi run check-llm）
+│   └── vcs_check.py            #   版本控制自检（pixi run check-vcs）
 │
 ├── docs/                       # ★ 文档（入口：docs/index.md）
 │   ├── index.md                #   文档导航
@@ -204,6 +205,8 @@ PaperBot/
 - **日志留档**：每次运行在 `logs/` 生成独立日志文件，可在 WebUI 查看 / 清理，自动清理过期日志
 - **文本渲染出图**：Markdown / 文本 → PNG（表格、代码高亮、任务列表都支持），插件可一行调用
 - **共享数据库**：所有插件共用一套 SQLite，天然数据互通；插件继承 `Base` 即自动建表
+- **版本控制**：WebUI「设置」页可一键拉取云端最新代码并重启（本地 push → 生产环境一键更新，
+  配置文件与数据不受影响），支持切到任意历史 commit 回滚
 
 ### 4.6 命令速查
 

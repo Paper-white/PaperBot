@@ -97,6 +97,25 @@ Copy-Item .env.example .config\main\.env
 
 详见 [`llm.md`](llm.md)。
 
+### 1.7 版本控制（一键拉取云端版本）
+
+> 用途：本地开发机 push → 服务器生产环境在 WebUI「设置」页点一下拉取最新代码。
+> 只拉不推，**不碰** `.config/` `data/` `logs/`。见 [`plans/05-version-control.md`](plans/05-version-control.md)。
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `VCS_ENABLE` | `true` | 是否启用版本控制（关闭则设置页不显示卡片） |
+| `VCS_REMOTE` | `origin` | 远程名 |
+| `VCS_BRANCH` | `main` | 跟踪分支 |
+| `VCS_REMOTE_URL` | 空 | 远程地址；留空 = 用仓库已有 origin，首次部署可填公开仓库 HTTPS 地址 |
+| `VCS_PROXY` | 空 | fetch 代理（如 `http://127.0.0.1:2080`），留空直连 |
+| `VCS_LOG_LIMIT` | `30` | 提交历史展示条数 |
+| `VCS_RESTART_MODE` | `spawn` | `spawn` = 自己拉起新进程；`exit` = 交给守护进程（systemd/NSSM） |
+| `VCS_SERVICE_NAME` | 空 | 守护服务名（如 `paperbot.service` / `PaperBot`），留空则不检测守护状态 |
+
+> ⚠️ 生产环境建议：配置 systemd（Linux）/ NSSM（Windows）守护服务并把
+> `VCS_RESTART_MODE` 设为 `exit`，同时填上 `VCS_SERVICE_NAME` 以便 WebUI 显示守护状态。
+
 ---
 
 ## 2. 插件配置（`.config/<插件名>/config.json`）

@@ -28,6 +28,7 @@ from webui.routes import permissions as permissions_routes
 from webui.routes import plugins as plugins_routes
 from webui.routes import settings as settings_routes
 from webui.routes import status as status_routes
+from webui.routes import version as version_routes
 
 logger = nonebot.logger
 
@@ -76,6 +77,7 @@ router.include_router(commands_routes.router)
 router.include_router(llm_routes.router)
 router.include_router(database_routes.router)
 router.include_router(settings_routes.router)
+router.include_router(version_routes.router)
 
 # 兼容旧引用
 api_router = router
