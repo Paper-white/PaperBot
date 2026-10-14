@@ -124,8 +124,9 @@ async def get_settings() -> dict:
         "runtime": _runtime_payload(),
         "logs": _log_payload(),
         "security": _security_payload(),
-        # 「服务与后台」「日志」两组的可编辑字段（写回走 PUT /api/config）
+        # 「设置」页：服务与后台；「日志」页：日志配置（均写回 PUT /api/config）
         "sections": config_route.render_sections(config_route.SETTINGS_SECTIONS, env),
+        "log_sections": config_route.render_sections(config_route.LOGS_SECTIONS, env),
         "config_path": str(envfile.env_path()),
     }
 
@@ -193,6 +194,26 @@ async def read_log(
         "name": path.name,
         "size_bytes": size,
         "size_text": human_size(size),
+        "lines": len(tail),
+        "content": "".join(tail),
+    }
+
+
+@router.get("/logs/tail")
+async def tail_current_log(
+    lines: int = Query(default=200, ge=1, le=MAX_TAIL_LINES),
+) -> dict:
+    """实时日志：读「本次运行」日志文件的末尾若干行（供日志页轮询）。"""
+    current = logcore.current_log_file()
+    if current is None or not current.is_file():
+        return {"enabled": settings.log_file_enable, "name": "", "content": "", "lines": 0}
+    with current.open("r", encoding="utf-8", errors="replace") as handle:
+        tail = deque(handle, maxlen=lines)
+    return {
+        "enabled": True,
+        "name": current.name,
+        "size_bytes": current.stat().st_size,
+        "size_text": human_size(current.stat().st_size),
         "lines": len(tail),
         "content": "".join(tail),
     }

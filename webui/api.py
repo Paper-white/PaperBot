@@ -51,6 +51,7 @@ PAGE_NAMES = (
     "llm",
     "database",
     "commands",
+    "logs",
     "settings",
 )
 

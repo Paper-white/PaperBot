@@ -169,7 +169,7 @@ SECTIONS: list[dict[str, Any]] = [
     },
 ]
 
-# 「设置」页里的配置分组（服务监听 + 管理后台 + 日志）。
+# 「设置」页里的配置分组（服务监听 + 管理后台）。
 # 说明：令牌（WEBUI_TOKEN）不在这里——设置页有专属卡片，可**不改 .env 即热更新**。
 SETTINGS_SECTIONS: list[dict[str, Any]] = [
     {
@@ -183,6 +183,10 @@ SETTINGS_SECTIONS: list[dict[str, Any]] = [
             _field("WEBUI_PREFIX", "API 前缀"),
         ],
     },
+]
+
+# 「日志」页里的配置分组（终端 + 每次运行的日志文件）。
+LOGS_SECTIONS: list[dict[str, Any]] = [
     {
         "id": "logging",
         "name": "日志",
@@ -207,7 +211,9 @@ SETTINGS_SECTIONS: list[dict[str, Any]] = [
 ]
 
 _FIELD_INDEX: dict[str, dict[str, Any]] = {
-    f["key"]: f for section in (SECTIONS + SETTINGS_SECTIONS) for f in section["fields"]
+    f["key"]: f
+    for section in (SECTIONS + SETTINGS_SECTIONS + LOGS_SECTIONS)
+    for f in section["fields"]
 }
 _FIELD_INDEX.update({f["key"]: f for f in QQ_ADAPTER["fields"]})
 _FIELD_INDEX.update({f["key"]: f for f in TELEGRAM_ADAPTER["fields"]})
