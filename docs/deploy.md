@@ -185,6 +185,7 @@ Docker 化部署属于 **Phase 4**，尚未实现。届时会提供 `Dockerfile`
 | 现象 | 排查方向 |
 |---|---|
 | 连不上协议端，日志有 `does not support websocket client connections` | `DRIVER` 少了 **`~websockets`**；确认 `ONEBOT_WS_URLS` 与令牌 |
+| 日志提示「⚠️ 无法连接协议端 ws://…：连接超时 / 拒绝连接」 | 这是**降噪后的**可读提示（原为刷屏 ERROR），排查：协议端是否启动、`ONEBOT_WS_URLS` 地址端口是否正确、网络 / 防火墙是否可达、协议端是否只监听 `127.0.0.1` |
 | 启动报找不到 `.config/main/.env` | 必须**在项目根目录**启动；或先按 2.2 生成配置 |
 | 消息发不出去（日志有 WARNING 说被拦截） | `BOT_ACTIVE_GROUPS` 没加目标群 / 私聊被守卫拦截（`OUTPUT_GUARD_ENABLED`） |
 | 插件 `@` 不理人 | 门控：`%plugin <插件名>` 看状态；或 `GATE_DEFAULT_ENABLED=false` 且群不在白名单 |

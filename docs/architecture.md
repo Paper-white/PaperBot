@@ -53,6 +53,7 @@
 | `src/core/reload.py` | 插件热重载（`importlib.reload` + matcher / 命令前缀清理 + 失败回滚） |
 | `src/core/logger.py` | 统一日志出口（`PrefixedLogger` 自动加 `[插件名] ` 前缀） |
 | `src/core/logging.py` | 日志文件输出（每次运行一个文件 + 查看 / 清理） |
+| `src/core/connlog.py` | 连接日志降噪（协议端重连报错：可读化 + 降级 + 节流） |
 | `src/core/llm.py` | 统一 LLM 服务（服务商 / 人设 / 会话 / 长期记忆 / 流式） |
 | `src/core/presets/` | 内置人设（`*.md`，YAML front-matter + 正文 = system prompt） |
 | `src/core/render.py` + `templates/` | 渲染核心：文本 / Markdown → PNG |

@@ -109,6 +109,16 @@ ls -t logs/*.log | head -1
 ### 框架 / NoneBot
 
 - ⚠️ **正向 WS 必须用 `~websockets` 驱动**，否则报 `does not support websocket client connections!`
+- ℹ️ **协议端连不上的刷屏日志已被降噪**（`src/core/connlog.py`，启动时自动安装）：
+  适配器每 3 秒重连会打一整段 ERROR + traceback，现在被改写为**一条可读中文 WARNING**
+  （含原因与排查建议），60 秒冷却窗口内**静默**、只在窗口结束时汇总一次。
+  - 实现：`logger.configure(patcher=...)` 挂全局 patcher，命中则原地改 `record["level"]`
+    （WARNING 降级 / TRACE 静默）并清掉 `record["exception"]`
+  - ⚠️ **判据只看消息内容**（`Error while setup/process data from websocket`），
+    **不要**依赖 `record["name"]`：适配器经 `logger_wrapper` 打日志，name 会随调用点变化
+  - ⚠️ 改 level 必须改 `record["level"]` 的 `.name/.no/.icon`（它是 `RecordLevel`），
+    **不能**整体替换成 `logger.level("WARNING")`（那是 `Level` 类，`{level}` 会渲染成 repr）
+
 - ⚠️ **自定义 `Permission` 子类必须调 `super().__init__(...)`**：基类带 `__slots__=("checkers",)`，
   不调就没有 `checkers` 属性 → `Feature.command()` 里 `permission | ...` 抛 `AttributeError` →
   **插件整个 import 失败**（表现为「插件加载不出来」）。多 checker 的 `Permission` 是 **OR** 语义

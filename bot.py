@@ -29,6 +29,11 @@ _log_file = setup_file_logging()
 if _log_file is not None:
     nonebot.logger.success(f"日志文件已开启：{_log_file}（目录：{log_dir()}）")
 
+# 连接日志降噪：把「连不上协议端」的刷屏 ERROR + traceback 变成可读的节流提示
+from src.core.connlog import install_connection_log_filter  # noqa: E402
+
+install_connection_log_filter()
+
 driver = nonebot.get_driver()
 driver.register_adapter(OneBotV11Adapter)
 

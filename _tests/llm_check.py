@@ -40,6 +40,9 @@ from src.core import database, llm  # noqa: E402
 from src.core.llm import LLMChunk, LLMResult, ProviderConfig  # noqa: E402
 from webui import api as webui_api  # noqa: E402
 
+# 隔离真实环境：真实 .env 若配了 WEBUI_TOKEN，会给自检的 HTTP 请求带来 401
+settings.webui_token = ""
+
 RESULTS: list[tuple[bool, str, str]] = []
 
 

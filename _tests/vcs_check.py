@@ -95,6 +95,8 @@ def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     from src.config import settings
 
     settings.database_url = f"sqlite+aiosqlite:///{(tmp / 'check.db').as_posix()}"
+    # 隔离真实环境：真实 .env 若配了 WEBUI_TOKEN，会给自检的 HTTP 请求带来 401
+    settings.webui_token = ""
     nonebot.init(driver="~none")
 
     from src.core import vcs
