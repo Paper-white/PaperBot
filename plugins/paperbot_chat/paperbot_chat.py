@@ -231,9 +231,12 @@ async def _reply(text: str, matcher=ai) -> None:
             from src.core.render import render_text
 
             png = await render_text(text, header=feature.display_name)
-            await matcher.finish(MessageSegment.image(png))
         except Exception as exc:  # noqa: BLE001 - 渲染失败不该把回复吞了
             feature.logger.opt(exception=exc).warning("渲染失败，退回纯文本发送")
+        else:
+            # ⚠️ finish 必须在 try 之外：它抛 FinishedException（继承 Exception），
+            # 若放在 try 里会被上面的 except 吞掉，导致图片和文本各发一次。
+            await matcher.finish(MessageSegment.image(png))
     await matcher.finish(text)
 
 
