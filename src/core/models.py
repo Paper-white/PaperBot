@@ -211,6 +211,10 @@ class LlmProvider(Base):
     base_url: Mapped[str] = mapped_column(String(256), default="")
     api_key: Mapped[str] = mapped_column(String(256), default="")
     model: Mapped[str] = mapped_column(String(128), default="")
+    # 多模型（优先 + 备用，最多 3 个）：JSON 数组，如 ["gpt-4o", "gpt-4o-mini"]
+    models: Mapped[Optional[str]] = mapped_column(String(512), default="")
+    # 模型优先级：越小越优先；0 表示无优先级（按 models 数组顺序）
+    priority: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     temperature: Mapped[float] = mapped_column(Float, default=0.8)
     max_tokens: Mapped[int] = mapped_column(Integer, default=0)
     timeout: Mapped[float] = mapped_column(Float, default=60.0)
@@ -303,7 +307,7 @@ class LlmMessage(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
-        return f"<LlmMessage s{session_id} {self.role} {self.content[:20]!r}>"
+        return f"<LlmMessage s{self.session_id} {self.role} {self.content[:20]!r}>"
 
 
 class LlmUserProfile(Base):

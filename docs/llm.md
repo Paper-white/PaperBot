@@ -73,8 +73,15 @@ curl http://127.0.0.1:6188/api/llm/status
 ### 1.3 首次配置三选一
 
 **A. 懒人版（`.env`）**：填 `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL`，重启即可。
-**B. 推荐版（WebUI）**：打开 `/llm` 页 → 「服务商」卡片 → 填名称/地址/密钥/模型 → 保存 → 点该行「设为默认」→ 点「测试」看到回复即成功。
-**C. 多模型版**：WebUI 加多条服务商，一条设为默认；某个插件想用别的，调用时传 `provider="名字"`。
+**B. 推荐版（WebUI）**：打开 `/llm` 页 → 「服务商」卡片 → 填名称/地址/密钥 → 点「获取可用模型」→ 选模型加入列表（最多 3 个）→ 保存 → 点该行「设为默认」→ 点「测试」看到回复即成功。
+**C. 多模型版**：同一个服务商里配最多 3 个模型（优先 + 备用），首选失败自动切下一个；也可以加多条服务商，一条设为默认，某插件想用别的就调用时传 `provider="名字"`。
+
+### 1.4 多模型优先级（优先 + 备用）
+
+- WebUI「服务商」卡片里可以**拉取中转站可用模型列表**（`GET /models`），把想要的模型加入列表、拖动排序，最多 **3 个**；
+- 排在最前的是**首选**，其余是**备用**；调用失败（限流 / 超时 / 报错）时自动按顺序切换重试；
+- 手动优先级字段 `priority` 数字小者靠前（WebUI 暂以列表顺序为准）；会话里显式指定的模型永远提到最前；
+- `.env` 兜底模型只有一个，不参与多模型切换（想用多模型请走 WebUI 服务商）。
 
 ---
 
@@ -288,7 +295,7 @@ enabled: true              # 可选：默认 true
 
 | 表 | 关键字段 | 唯一键 |
 |---|---|---|
-| `llm_provider` | `name` / `base_url` / `api_key` / `model` / `temperature` / `max_tokens` / `timeout` / `extra`(JSON) / `enabled` / `is_default` / `updated_by` / `updated_at` | `name` |
+| `llm_provider` | `name` / `base_url` / `api_key` / `model` / `models`(JSON 数组，最多 3 个) / `priority` / `temperature` / `max_tokens` / `timeout` / `extra`(JSON) / `enabled` / `is_default` / `updated_by` / `updated_at` | `name` |
 | `llm_preset` | `name` / `display_name` / `description` / `system_prompt` / `params`(JSON) / `enabled` / `source` / `updated_by` / `updated_at` | `name` |
 | `llm_session` | `scope_type` / `scope_id` / `plugin_name` / `preset_name` / `provider_name` / `message_count` / `user_message_count` / `created_at` / `updated_at` | (`scope_type`,`scope_id`,`plugin_name`) |
 | `llm_message` | `session_id` / `role` / `content` / `name` / `created_at` | — |

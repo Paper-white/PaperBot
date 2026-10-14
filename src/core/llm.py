@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterable, Optional, Sequence
 
+import httpx
 import nonebot
 from sqlalchemy import select
 
@@ -65,6 +66,9 @@ SECRET_MASK = "********"
 
 # `.env` 兜底配置的「虚拟服务商名」（DB 里的服务商可以起任何别的名字）
 ENV_PROVIDER_NAME = "env"
+
+# 单个服务商最多可配置的模型数（优先 + 备用）
+MAX_MODELS = 3
 
 # 数据库里的时间统一按 UTC 存（SQLite 的 func.now() 就是 UTC），对外展示时换算成本地时区
 CST = timezone(timedelta(hours=8))
@@ -120,6 +124,10 @@ class ProviderConfig:
     base_url: str = ""
     api_key: str = ""
     model: str = "gpt-4o-mini"
+    # 多模型优先级列表（含首选）：["gpt-4o", "gpt-4o-mini"] → 先 4o，失败切 4o-mini
+    models: list[str] = field(default_factory=list)
+    # 手动优先级：数字越小越靠前；0 = 未设置（按 models 数组顺序）
+    priority: int = 0
     temperature: float = 0.8
     max_tokens: int = 0
     timeout: float = 60.0
@@ -131,6 +139,8 @@ class ProviderConfig:
             "name": self.name,
             "base_url": self.base_url,
             "model": self.model,
+            "models": list(self.models or []),
+            "priority": self.priority or 0,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "timeout": self.timeout,
@@ -192,8 +202,25 @@ class OpenAIChatClient(ChatClient):
     def __init__(self) -> None:
         self._clients: dict[tuple, Any] = {}
 
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        """把中转站地址规范成 OpenAI SDK 能用的形态。
+
+        很多中转站填的地址不带 `/v1`（如 `https://xxx.top`），
+        此时 SDK 会去请求 `https://xxx.top/chat/completions`，
+        中转站通常返回 HTML 首页而非 JSON → SDK 解析出空 content。
+        这里在缺版本段时自动补 `/v1`，与 `fetch_models` 的行为保持一致。
+        """
+        url = (base_url or "").strip().rstrip("/")
+        if not url:
+            return url
+        if not re.search(r"/v\d+$", url):
+            url += "/v1"
+        return url
+
     def _client(self, cfg: ProviderConfig):
-        key = (cfg.base_url, cfg.api_key, cfg.timeout, settings.llm_proxy)
+        base_url = self._normalize_base_url(cfg.base_url)
+        key = (base_url, cfg.api_key, cfg.timeout, settings.llm_proxy)
         client = self._clients.get(key)
         if client is None:
             from openai import AsyncOpenAI
@@ -202,8 +229,8 @@ class OpenAIChatClient(ChatClient):
                 "api_key": cfg.api_key or "sk-placeholder",
                 "timeout": cfg.timeout or 60.0,
             }
-            if cfg.base_url:
-                kwargs["base_url"] = cfg.base_url
+            if base_url:
+                kwargs["base_url"] = base_url
             if settings.llm_proxy:
                 import httpx
 
@@ -369,11 +396,24 @@ def _row_to_provider(row: LlmProvider) -> ProviderConfig:
                 extra = loaded
         except ValueError:
             logger.opt(exception=True).warning(f"服务商 {row.name} 的 extra 不是合法 JSON，已忽略")
+    models: list[str] = []
+    raw_models = getattr(row, "models", "") or ""
+    if raw_models:
+        try:
+            loaded = json.loads(raw_models)
+            if isinstance(loaded, list):
+                models = [str(m).strip() for m in loaded if str(m).strip()]
+        except ValueError:
+            logger.opt(exception=True).warning(f"服务商 {row.name} 的 models 不是合法 JSON，已忽略")
+    if not models and row.model:
+        models = [row.model]
     return ProviderConfig(
         name=row.name,
         base_url=row.base_url or "",
         api_key=row.api_key or "",
-        model=row.model or "gpt-4o-mini",
+        model=row.model or (models[0] if models else "gpt-4o-mini"),
+        models=models,
+        priority=int(getattr(row, "priority", None) or 0),
         temperature=row.temperature if row.temperature is not None else 0.8,
         max_tokens=row.max_tokens or 0,
         timeout=row.timeout or 60.0,
@@ -490,6 +530,8 @@ async def resolve_provider(name: Optional[str] = None) -> ProviderConfig:
         )
     if not cfg.model:
         cfg.model = settings.llm_model or "gpt-4o-mini"
+    if not cfg.models:
+        cfg.models = [cfg.model]
     return cfg
 
 
@@ -499,6 +541,8 @@ async def set_provider(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    models: Optional[list[str]] = None,
+    priority: Optional[int] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
@@ -523,6 +567,16 @@ async def set_provider(
             except ValueError as exc:
                 raise LLMError(f"extra 必须是合法 JSON 对象：{exc}") from exc
         extra_text = extra.strip()
+    models_text: Optional[str] = None
+    if models is not None:
+        models = [str(m).strip() for m in models if str(m).strip()]
+        if not models:
+            raise LLMError("模型列表不能为空")
+        if len(models) > MAX_MODELS:
+            raise LLMError(f"最多只能配置 {MAX_MODELS} 个模型（优先 + 备用）")
+        for m in models:
+            _validate_provider_fields(model=m)
+        models_text = json.dumps(models, ensure_ascii=False)
 
     async with get_session() as session:
         row = await get_provider_row(name, session=session)
@@ -539,6 +593,10 @@ async def set_provider(
         if model is not None:
             _validate_provider_fields(model=model)
             row.model = model.strip()
+        if models_text is not None:
+            row.models = models_text
+        if priority is not None:
+            row.priority = max(0, int(priority))
         if temperature is not None:
             row.temperature = float(temperature)
         if max_tokens is not None:
@@ -586,6 +644,141 @@ async def delete_provider(name: str) -> bool:
                 nxt.is_default = True
         await session.commit()
     return True
+
+
+# ============================== 模型拉取 ==============================
+
+
+async def _resolve_model_config(
+    base_url: Optional[str] = None, api_key: Optional[str] = None
+) -> tuple[str, str]:
+    """把「中转站地址 + token」解析成可发 HTTP 请求的 base_url / api_key。
+
+    - base_url 为空 → 从当前默认服务商取；还没有 → 用 .env 兜底；
+    - 老 base_url 没带 `/v1` → 自动补上（中转站常见写法），保证 /models 能拼对。
+    """
+    raw = (base_url or "").strip()
+    key = (api_key or "").strip()
+    if not raw or not key:
+        cfg = await resolve_provider(None)
+        raw = raw or cfg.base_url
+        key = key or cfg.api_key
+    raw = raw.strip()
+    if not raw:
+        raise LLMError("请先填写中转站 API 地址")
+    if not key:
+        raise LLMError("请先填写中转站 Token")
+    _validate_provider_fields(base_url=raw, api_key=key)
+    url = raw if raw.lower().startswith(("http://", "https://")) else f"https://{raw}"
+    # 与对话调用共用同一套规范化逻辑（缺 /v1 自动补）
+    url = OpenAIChatClient._normalize_base_url(url)
+    return url, key
+
+
+async def fetch_models(
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    *,
+    timeout: float = 20.0,
+) -> list[str]:
+    """从 OpenAI 兼容中转站拉取可用模型名列表（GET /models）。
+
+    中转站不实现该端点时，错误信息会给出常见原因（key 不对 / 地址不对 / 端点不支持）。
+    """
+    url, key = await _resolve_model_config(base_url, api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    async with httpx.AsyncClient(timeout=timeout) as hc:
+        try:
+            resp = await hc.get(f"{url.rstrip('/')}/models", headers=headers)
+        except httpx.HTTPError as exc:
+            raise LLMError(f"拉取模型列表失败（网络错误）：{exc}") from exc
+    if resp.status_code == 401:
+        raise LLMError("Token 无效或已过期（401）")
+    if resp.status_code == 403:
+        raise LLMError("没有权限访问该中转站（403）")
+    if resp.status_code == 404:
+        raise LLMError("该地址不支持 /models 端点（404），请检查是否填到了 /v1 那一层")
+    if resp.status_code >= 400:
+        raise LLMError(f"拉取模型列表失败：HTTP {resp.status_code}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise LLMError("模型列表返回的不是合法 JSON") from exc
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise LLMError("返回内容里没有 data 列表，可能不是 OpenAI 兼容的中转站")
+    models: list[str] = []
+    for item in items:
+        if isinstance(item, dict) and item.get("id"):
+            models.append(str(item["id"]))
+    if not models:
+        raise LLMError("中转站返回的模型列表为空")
+    return models
+
+
+# ============================== 核心调用（多模型优先级） ==============================
+
+
+def _order_models(cfg: ProviderConfig, preferred: Optional[str] = None) -> list[str]:
+    """按「手动优先级 → 会话首选 → 配置顺序」排出候选模型列表。
+
+    - 手动优先级（`priority`，数字小者靠前）优先；同优先级按配置顺序稳定；
+    - `preferred`（本次会话首选，如群/个人显式指定的模型）总是提到最前；
+    - 去重、限 `MAX_MODELS` 个。
+    """
+    base = [m for m in (cfg.models or []) if m]
+    if not base:
+        base = [cfg.model] if cfg.model else []
+    out: list[str] = []
+    for m in base:
+        if m not in out:
+            out.append(m)
+    if preferred:
+        pref = str(preferred).strip()
+        if pref in out:
+            out.remove(pref)
+        out.insert(0, pref)
+        out = out[:MAX_MODELS]
+    return out
+
+
+async def _try_models(
+    cfg: ProviderConfig,
+    payload: list[dict],
+    params: dict,
+    candidates: list[str],
+    *,
+    stream: bool = False,
+) -> tuple[LLMResult, str]:
+    """按候选顺序逐个尝试，失败自动切下一个；全失败抛最后一个 LLMError。"""
+    errors: list[str] = []
+    last_exc: Optional[LLMError] = None
+    for idx, model in enumerate(candidates):
+        attempt_params = dict(params)
+        attempt_params["model"] = model
+        try:
+            if stream:
+                pieces: list[str] = []
+                result: Optional[LLMResult] = None
+                async for chunk in client().stream(cfg, payload, attempt_params):
+                    if not chunk.done:
+                        pieces.append(chunk.delta)
+                    else:
+                        result = chunk.result
+                        if result is not None:
+                            result.text = "".join(pieces) or result.text
+                        break
+                if result is None:
+                    raise LLMError("流式返回为空")
+                return result, model
+            result = await client().complete(cfg, payload, attempt_params)
+            return result, model
+        except LLMError as exc:
+            last_exc = exc
+            hint = f"{model}: {exc}"
+            errors.append(hint)
+            logger.warning(f"模型 {model} 调用失败，尝试下一个（{idx + 1}/{len(candidates)}）：{exc}")
+    raise LLMError("全部模型都调用失败：" + "；".join(errors)) from last_exc
 
 
 async def test_provider(name: Optional[str] = None) -> LLMResult:
@@ -1767,16 +1960,11 @@ async def chat(
     session_id, history = await _prepare_context(req)
     payload = _assemble(req, history)
     stream_on = settings.llm_stream_enable if use_stream is None else bool(use_stream)
-    impl = client()
-    if stream_on:
-        result: Optional[LLMResult] = None
-        async for chunk in impl.stream(req["cfg"], payload, req["params"]):
-            if chunk.done:
-                result = chunk.result
-        if result is None:
-            raise LLMError("LLM 流式返回为空")
-    else:
-        result = await impl.complete(req["cfg"], payload, req["params"])
+    candidates = _order_models(req["cfg"], req["params"].get("model"))
+    result, used_model = await _try_models(
+        req["cfg"], payload, req["params"], candidates, stream=stream_on
+    )
+    result.model = result.model or used_model
     result.preset = req["preset"]
     result.provider = req["cfg"].name or "env"
     await _persist_turn(req, session_id=session_id, reply=result.text)
@@ -1836,26 +2024,49 @@ async def stream(
     session_id, history = await _prepare_context(req)
     payload = _assemble(req, history)
     effective = settings.llm_stream_enable if use_stream is None else bool(use_stream)
-    impl = client()
+    candidates = _order_models(req["cfg"], req["params"].get("model"))
     if not effective:
-        result = await impl.complete(req["cfg"], payload, req["params"])
+        result, used_model = await _try_models(
+            req["cfg"], payload, req["params"], candidates, stream=False
+        )
+        result.model = result.model or used_model
         result.preset = req["preset"]
         result.provider = req["cfg"].name or "env"
         await _persist_turn(req, session_id=session_id, reply=result.text)
         yield LLMChunk(delta=result.text, text=result.text, done=True, result=result)
         return
-    result = None
-    async for chunk in impl.stream(req["cfg"], payload, req["params"]):
-        if not chunk.done:
-            yield chunk
-            continue
-        result = chunk.result
-        if result is not None:
-            result.preset = req["preset"]
-            result.provider = req["cfg"].name or "env"
-        yield LLMChunk(delta="", text=chunk.text, done=True, result=result)
-    if result is not None:
-        await _persist_turn(req, session_id=session_id, reply=result.text)
+    # 逐片流式：每个模型都真实流式输出；失败切下一个模型重试
+    last_exc: Optional[LLMError] = None
+    errors: list[str] = []
+    for idx, model in enumerate(candidates):
+        attempt_params = dict(req["params"])
+        attempt_params["model"] = model
+        try:
+            pieces: list[str] = []
+            result: Optional[LLMResult] = None
+            async for chunk in client().stream(req["cfg"], payload, attempt_params):
+                if not chunk.done:
+                    pieces.append(chunk.delta)
+                    yield chunk
+                    continue
+                result = chunk.result
+                if result is not None:
+                    result.text = "".join(pieces) or result.text
+                    result.model = result.model or model
+                    result.preset = req["preset"]
+                    result.provider = req["cfg"].name or "env"
+                yield LLMChunk(delta="", text="".join(pieces), done=True, result=result)
+                if result is not None:
+                    await _persist_turn(req, session_id=session_id, reply=result.text)
+                return
+            # 正常情况不会走到这里（客户端总会发 done 片）
+            if result is None:
+                raise LLMError("流式返回为空")
+        except LLMError as exc:
+            last_exc = exc
+            errors.append(f"{model}: {exc}")
+            logger.warning(f"模型 {model} 流式调用失败，尝试下一个（{idx + 1}/{len(candidates)}）：{exc}")
+    raise LLMError("全部模型都调用失败：" + "；".join(errors)) from last_exc
 
 
 # ============================== 插件门面 ==============================

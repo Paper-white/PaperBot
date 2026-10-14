@@ -1545,17 +1545,18 @@
                 '</td><td>' + (p.enabled ? badge('启用', 'green') : badge('停用', 'grey')) + '</td>' +
                 '<td class="mono hint">' + esc(p.base_url || '-') + '</td>' +
                 '<td class="mono">' + esc(p.model || '-') + '</td>' +
+                '<td class="hint">' + ((p.models && p.models.length) || 0) + ' 个</td>' +
                 '<td>' + (p.api_key_set ? badge('已设置', 'green') : badge('未设置', 'amber')) + '</td>' +
                 '<td>' + actions + '</td></tr>'
               );
             })
             .join('')
-        : '<tr><td colspan="6" class="hint">还没有服务商（当前只能靠 .env 兜底）</td></tr>';
+        : '<tr><td colspan="7" class="hint">还没有服务商（当前只能靠 .env 兜底）</td></tr>';
 
       var provCard = card(
         '服务商',
-        '<div class="table-wrap"><table><thead><tr>' +
-          '<th>名称</th><th>状态</th><th>API 地址</th><th>模型</th><th>密钥</th><th>操作</th>' +
+          '<div class="table-wrap"><table><thead><tr>' +
+          '<th>名称</th><th>状态</th><th>API 地址</th><th>首选模型</th><th>模型数</th><th>密钥</th><th>操作</th>' +
           '</tr></thead><tbody>' + provRows + '</tbody></table></div>' +
           '<div class="form-row spaced">' +
           '<div class="field"><label>名称</label><input class="input" id="llm-prov-name" placeholder="如 deepseek"></div>' +
@@ -1563,12 +1564,24 @@
           '<input class="input wide" id="llm-prov-url" placeholder="https://api.deepseek.com/v1"></div>' +
           '<div class="field" style="flex:1;min-width:200px"><label>API Key</label>' +
           '<input class="input wide" id="llm-prov-key" type="password" placeholder="留空 = 不改（新建时为空）" autocomplete="off"></div>' +
-          '<div class="field"><label>模型</label><input class="input" id="llm-prov-model" placeholder="deepseek-chat"></div>' +
           '<div class="field"><label>温度</label><input class="input short" id="llm-prov-temp" placeholder="留空默认"></div>' +
           '<div class="field"><label>设为默认</label><select class="input" id="llm-prov-default">' +
           '<option value="1">是（推荐）</option><option value="0">否</option></select></div>' +
           '<button class="btn" data-llm-prov-save>保存服务商</button>' +
           '</div>' +
+          '<div class="field spaced"><label>模型（优先 + 备用，最多 3 个，拖动排序）</label>' +
+          '<div class="hint">填好地址和 Key 后点「获取可用模型」，从下拉里选模型加入列表；排在最前的作为首选，失败自动切下一个。</div>' +
+          '<div class="form-row" style="align-items:flex-end">' +
+          '<div class="field" style="flex:1;min-width:220px"><select class="input" id="llm-models-select"><option value="">（先获取模型）</option></select></div>' +
+          '<button class="btn ghost" data-llm-models-fetch>获取可用模型</button>' +
+          '<button class="btn ghost" data-llm-models-add>加入列表</button>' +
+          '</div>' +
+          '<ol class="model-list" id="llm-models-list"></ol>' +
+          '<div class="form-row spaced">' +
+          '<button class="btn ghost small" data-llm-models-up>↑ 上移</button>' +
+          '<button class="btn ghost small" data-llm-models-down>↓ 下移</button>' +
+          '<button class="btn ghost small danger" data-llm-models-remove>移除选中</button>' +
+          '</div></div>' +
           '<div class="hint spaced">「测试」会真实发一条 <span class="mono">ping</span> 并返回耗时；' +
           '编辑时密钥留空 = 保持原值（要换就直接填新的）。</div>',
         prov.count + ' 个（含 .env 兜底虚拟项）'
@@ -1719,10 +1732,46 @@
     root.querySelector('#llm-prov-name').value = p.name || '';
     root.querySelector('#llm-prov-url').value = p.base_url || '';
     root.querySelector('#llm-prov-key').value = p.api_key_set ? (p.api_key || '') : '';
-    root.querySelector('#llm-prov-model').value = p.model || '';
     root.querySelector('#llm-prov-temp').value = p.temperature === null || p.temperature === undefined ? '' : p.temperature;
     root.querySelector('#llm-prov-default').value = p.is_default ? '1' : '0';
+    setModelList(root, p.models && p.models.length ? p.models : (p.model ? [p.model] : []));
     toast('已载入「' + (p.name || '') + '」，密钥留空即保持原值', 'ok');
+  }
+
+  var MODEL_STORE = {};
+  function setModelList(root, models) {
+    MODEL_STORE = (models || []).slice(0, 3);
+    renderModelList(root);
+  }
+  function renderModelList(root) {
+    var list = root.querySelector('#llm-models-list');
+    if (!list) return;
+    list.innerHTML = MODEL_STORE.length
+      ? MODEL_STORE.map(function (m, i) {
+          return (
+            '<li data-llm-model-idx="' + i + '"' + (i === 0 ? ' class="first"' : '') + '>' +
+            '<span class="mono">' + esc(m) + '</span>' +
+            (i === 0 ? ' <span class="hint">（首选）</span>' : '') + '</li>'
+          );
+        }).join('')
+      : '<li class="hint">还没有添加模型（至少选 1 个）</li>';
+    list.querySelectorAll('li[data-llm-model-idx]').forEach(function (li) {
+      li.addEventListener('click', function () {
+        list.querySelectorAll('li').forEach(function (x) { x.classList.remove('selected'); });
+        li.classList.add('selected');
+      });
+    });
+  }
+  function selectedModelIdx() {
+    var sel = document.querySelector('#llm-models-list li.selected');
+    return sel && sel.dataset.llmModelIdx !== undefined ? parseInt(sel.dataset.llmModelIdx, 10) : -1;
+  }
+  function fillModelSelect(root, models) {
+    var sel = root.querySelector('#llm-models-select');
+    if (!sel) return;
+    var html = '<option value="">（' + models.length + ' 个可用，点选加入）</option>';
+    html += models.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
+    sel.innerHTML = html;
   }
 
   function fillPresetForm(root, name, d) {
@@ -1855,9 +1904,13 @@
         var temp = val('#llm-prov-temp').trim();
         var body = {
           base_url: val('#llm-prov-url').trim(),
-          model: val('#llm-prov-model').trim(),
           is_default: val('#llm-prov-default') === '1',
         };
+        if (MODEL_STORE.length) {
+          body.models = MODEL_STORE;
+          body.model = MODEL_STORE[0];
+          body.priority = 0;
+        }
         var keyValue = val('#llm-prov-key');
         if (keyValue) body.api_key = keyValue; // 留空 = 不改动
         if (temp) body.temperature = parseFloat(temp);
@@ -1913,6 +1966,70 @@
         })
         .catch(function (err) { toast('删除失败：' + err.message, 'err'); });
     });
+
+    /* ---- 多模型（获取可用模型 + 优先/备用排序） ---- */
+    var fetchModels = root.querySelector('[data-llm-models-fetch]');
+    if (fetchModels) {
+      fetchModels.addEventListener('click', function () {
+        var url = val('#llm-prov-url').trim();
+        var key = val('#llm-prov-key');
+        fetchModels.disabled = true;
+        toast('正在拉取模型列表…');
+        send('/llm/models/fetch', 'POST', { base_url: url, api_key: key })
+          .then(function (res) {
+            fillModelSelect(root, res.models || []);
+            toast(res.message || '拉取成功', 'ok');
+          })
+          .catch(function (err) {
+            toast('拉取失败：' + err.message, 'err');
+          })
+          .then(function () { fetchModels.disabled = false; });
+      });
+    }
+
+    var addModel = root.querySelector('[data-llm-models-add]');
+    if (addModel) {
+      addModel.addEventListener('click', function () {
+        var sel = root.querySelector('#llm-models-select');
+        var m = sel ? sel.value : '';
+        if (!m) { toast('先从下拉里选一个模型', 'err'); return; }
+        if (MODEL_STORE.indexOf(m) !== -1) { toast('这个模型已经在列表里了', 'err'); return; }
+        if (MODEL_STORE.length >= 3) { toast('最多 3 个模型（优先 + 备用）', 'err'); return; }
+        MODEL_STORE.push(m);
+        renderModelList(root);
+        toast('已加入：' + m, 'ok');
+      });
+    }
+
+    var moveUp = root.querySelector('[data-llm-models-up]');
+    if (moveUp) {
+      moveUp.addEventListener('click', function () {
+        var i = selectedModelIdx();
+        if (i <= 0) { toast('先选中一个可上移的模型', 'err'); return; }
+        var t = MODEL_STORE[i - 1]; MODEL_STORE[i - 1] = MODEL_STORE[i]; MODEL_STORE[i] = t;
+        renderModelList(root);
+      });
+    }
+
+    var moveDown = root.querySelector('[data-llm-models-down]');
+    if (moveDown) {
+      moveDown.addEventListener('click', function () {
+        var i = selectedModelIdx();
+        if (i < 0 || i >= MODEL_STORE.length - 1) { toast('先选中一个可下移的模型', 'err'); return; }
+        var t = MODEL_STORE[i + 1]; MODEL_STORE[i + 1] = MODEL_STORE[i]; MODEL_STORE[i] = t;
+        renderModelList(root);
+      });
+    }
+
+    var removeModel = root.querySelector('[data-llm-models-remove]');
+    if (removeModel) {
+      removeModel.addEventListener('click', function () {
+        var i = selectedModelIdx();
+        if (i < 0) { toast('先选中要移除的模型', 'err'); return; }
+        MODEL_STORE.splice(i, 1);
+        renderModelList(root);
+      });
+    }
 
     /* ---- 试聊 ---- */
     var chatBtn = root.querySelector('[data-llm-chat]');

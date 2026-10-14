@@ -57,6 +57,9 @@ class ProviderPayload(BaseModel):
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
+    # 多模型优先级列表（优先 + 备用，最多 MAX_MODELS 个）
+    models: Optional[list[str]] = None
+    priority: Optional[int] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     timeout: Optional[float] = None
@@ -98,6 +101,16 @@ class ChatPayload(BaseModel):
     preset: str = ""
     provider: str = ""
     system: str = ""
+
+
+class FetchModelsPayload(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+
+
+class ProviderModelsPayload(BaseModel):
+    models: list[str]
+    priority: int = 0
 
 
 def _masked_key(value: Optional[str]) -> Optional[str]:
@@ -177,6 +190,8 @@ async def upsert_provider(name: str, payload: ProviderPayload) -> dict:
             base_url=payload.base_url,
             api_key=_masked_key(payload.api_key),
             model=payload.model,
+            models=payload.models,
+            priority=payload.priority,
             temperature=payload.temperature,
             max_tokens=payload.max_tokens,
             timeout=payload.timeout,
@@ -222,6 +237,42 @@ async def test_provider(name: str) -> dict:
         "usage": result.usage,
         "message": f"连接正常（{elapsed}ms）",
     }
+
+
+@router.post("/llm/models/fetch")
+async def fetch_models(payload: FetchModelsPayload) -> dict:
+    """拉取中转站可用模型列表（base_url / api_key 留空 = 用当前默认服务商的）。"""
+    started = time.perf_counter()
+    try:
+        models = await llm.fetch_models(payload.base_url.strip(), payload.api_key.strip())
+    except LLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elapsed = int((time.perf_counter() - started) * 1000)
+    logger.info(f"WebUI：拉取模型列表成功（{len(models)} 个，{elapsed}ms）")
+    return {
+        "ok": True,
+        "models": models,
+        "count": len(models),
+        "max_models": llm.MAX_MODELS,
+        "elapsed_ms": elapsed,
+        "message": f"拉到 {len(models)} 个模型",
+    }
+
+
+@router.post("/llm/providers/{name}/models")
+async def update_provider_models(name: str, payload: ProviderModelsPayload) -> dict:
+    """单独更新某服务商的多模型优先级（优先 + 备用，最多 3 个）。"""
+    try:
+        row = await llm.set_provider(
+            name,
+            models=payload.models,
+            priority=payload.priority,
+            updated_by="webui",
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info(f"WebUI：服务商 {name} 的多模型已更新（{payload.models}）")
+    return {"ok": True, "item": row, "message": f"服务商「{name}」的模型优先级已保存"}
 
 
 # --------------------------------------------------------------------------- #

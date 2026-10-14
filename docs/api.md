@@ -38,6 +38,8 @@ GET    /api/llm/providers                                服务商列表（密�
 PUT    /api/llm/providers/{name}                         新增 / 更新服务商（密钥传掩码或省略 = 不改）
 DELETE /api/llm/providers/{name}                         删除服务商（env → 400）
 POST   /api/llm/providers/{name}/test                    试连一次，返回文本 / 模型 / 耗时 / 用量
+POST   /api/llm/models/fetch                             拉取中转站可用模型 {base_url?, api_key?}（留空 = 用默认服务商）
+POST   /api/llm/providers/{name}/models                  更新某服务商的多模型优先级 {models:[...], priority?}（最多 3 个）
 GET    /api/llm/presets[?with_prompt=]                   人设列表（可带正文）
 GET    /api/llm/presets/{name}                           人设详情（含导出文本）
 PUT    /api/llm/presets/{name}                           新建 / 保存人设（来源标记为「人工」）

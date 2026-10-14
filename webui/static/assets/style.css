@@ -214,6 +214,17 @@ td.mono, .mono { font-family: Consolas, "Courier New", monospace; font-size: 12.
 .spaced { margin-top: 12px; }
 .dim { color: #a1a8c8; }
 .hint { color: #98a0c0; font-size: 12px; }
+.model-list {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+}
+.model-list li {
+  padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--line); background: #fafbff;
+}
+.model-list li:last-child { border-bottom: none; }
+.model-list li.selected { background: var(--blue-soft); }
+.model-list li.first .mono { color: var(--pink); font-weight: 600; }
 .log-view {
   margin-top: 6px; background: #1f2233; color: #dfe3ff;
   border-radius: 12px; padding: 14px 16px; max-height: 380px; overflow: auto;
