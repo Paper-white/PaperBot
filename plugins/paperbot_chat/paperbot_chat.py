@@ -120,8 +120,6 @@ _COOLDOWN: dict[str, float] = {}
 
 # 群聊对话模式：{群号: {"active": 最后活跃时间, "reply": 上次回复时间}}
 _GROUP_MODE: dict[str, dict[str, float]] = {}
-# 群聊历史缓存：{群号: [最近的群消息文本, ...]}
-_GROUP_HISTORY: dict[str, list[str]] = {}
 
 
 def _command_starts() -> tuple[str, ...]:
@@ -189,7 +187,6 @@ def _group_mode_active(gid: str) -> bool:
         return True
     if time.monotonic() - mode["active"] > timeout:
         _GROUP_MODE.pop(gid, None)
-        _GROUP_HISTORY.pop(gid, None)
         return False
     return True
 
@@ -198,18 +195,6 @@ def _touch_group(gid: str) -> None:
     """刷新群对话模式的活跃时间（进入 / 有人说话时调用）。"""
     mode = _GROUP_MODE.setdefault(gid, {"active": 0.0, "reply": 0.0})
     mode["active"] = time.monotonic()
-
-
-def _push_group_history(gid: str, text: str) -> None:
-    limit = int(feature.cfg("group_history", 10) or 0)
-    if limit <= 0:
-        return
-    if not text:
-        return
-    hist = _GROUP_HISTORY.setdefault(gid, [])
-    hist.append(text)
-    if len(hist) > limit:
-        del hist[: len(hist) - limit]
 
 
 async def _preset_for(scope: str, scope_id: str) -> str:
@@ -238,14 +223,6 @@ async def _reply(text: str, matcher=ai) -> None:
             # 若放在 try 里会被上面的 except 吞掉，导致图片和文本各发一次。
             await matcher.finish(MessageSegment.image(png))
     await matcher.finish(text)
-
-
-def _group_history_block(gid: str) -> str:
-    """把缓存里的群聊历史拼成一段提示（给 LLM 感知群聊氛围）。"""
-    hist = _GROUP_HISTORY.get(gid, [])
-    if not hist:
-        return ""
-    return "【最近的群聊记录（供你感知氛围，不要逐条复述）】\n" + "\n".join(f"- {h}" for h in hist)
 
 
 # --------------------------------------------------------------------------- #
@@ -278,7 +255,6 @@ async def _handle_group_chat(event: GroupMessageEvent) -> None:
     # ① 艾特触发：开启（或续期）本群对话模式
     if to_me:
         _touch_group(gid)
-        _push_group_history(gid, _format_speaker(event, text) if text else "")
         feature.logger.info(f"群 {gid} 的对话模式已开启/续期（@触发）")
         left = _group_cooldown_left(gid)
         if left:
@@ -290,7 +266,6 @@ async def _handle_group_chat(event: GroupMessageEvent) -> None:
     if not _group_mode_active(gid):
         return
     _touch_group(gid)
-    _push_group_history(gid, _format_speaker(event, text) if text else "")
     left = _group_cooldown_left(gid)
     if left:
         return  # 冷却中，不刷屏
@@ -308,23 +283,58 @@ def _format_speaker(event: GroupMessageEvent, text: str) -> str:
 
 
 async def _group_talk(event: GroupMessageEvent, gid: str, text: str, *, triggered: bool) -> None:
-    """群聊对话：群共享上下文 + 注入最近群聊历史。"""
+    """群聊对话：从聊天流水读最近群消息 + 注入群记忆/发言者个人记忆。"""
     if not text:
         if triggered:
             await group_chat.finish("在的呀，想聊什么？")
         return
     preset = await _preset_for("group", gid)
-    hist_block = _group_history_block(gid)
-    content = f"{hist_block}\n\n【当前消息】{_format_speaker(event, text)}" if hist_block else text
+    # 群上下文直接从 chat_message（聊天流水）读，不再维护内存缓存
+    hist_block = await _chatlog_history_block(gid)
+    content = (
+        f"{hist_block}\n\n【当前消息】{_format_speaker(event, text)}"
+        if hist_block
+        else text
+    )
+    # 通过 extra 内部键把「当前发言者 QQ」传给框架（用于注入其个人记忆）
+    sender_id = _need_id(event)
     try:
         reply = await feature.llm.ask(
-            content, scope="group", scope_id=gid, preset=preset
+            content,
+            scope="group",
+            scope_id=gid,
+            preset=preset,
+            extra={"_sender_id": sender_id},
         )
     except LLMError as exc:
         feature.logger.warning(f"群 {gid} 对话失败：{exc}")
         await group_chat.finish(f"LLM 暂时用不了：{exc}")
         return  # pragma: no cover - finish 不会返回，这里只为了静态分析
     await _reply(reply, matcher=group_chat)
+
+
+async def _chatlog_history_block(gid: str) -> str:
+    """从聊天流水（chat_message）读最近 N 条群消息，拼成氛围提示。"""
+    from src.core import chatlog
+
+    limit = int(feature.cfg("group_history", 10) or 0)
+    if limit <= 0:
+        return ""
+    try:
+        msgs = await chatlog.recent_messages(gid, limit=limit)
+    except Exception as exc:  # noqa: BLE001 - 读历史失败不影响回复
+        feature.logger.opt(exception=exc).warning(f"读群 {gid} 聊天流水失败")
+        return ""
+    if not msgs:
+        return ""
+    lines = [
+        f"{m.get('nickname') or m.get('user_id')}：{m.get('content')}"
+        for m in msgs
+        if not m.get("is_bot")
+    ]
+    if not lines:
+        return ""
+    return "【最近的群聊记录（供你感知氛围，不要逐条复述）】\n" + "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -353,7 +363,6 @@ async def _handle(event: MessageEvent, args: Message = CommandArg()) -> None:
         if not group_id:
             await ai.finish("这个命令要在群里用哦～")
         _GROUP_MODE.pop(group_id, None)
-        _GROUP_HISTORY.pop(group_id, None)
         await ai.finish("好哦，本群的对话模式已关闭（想再聊艾特我一下就行）")
     if sub in {"群状态", "群模式", "groupmode"}:
         if not group_id:
@@ -503,5 +512,4 @@ async def _on_load() -> None:
 async def _on_unload() -> None:
     _COOLDOWN.clear()
     _GROUP_MODE.clear()
-    _GROUP_HISTORY.clear()
     feature.logger.info("对话插件已卸载")
