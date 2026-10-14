@@ -21,15 +21,15 @@
 
 ### 3. 历史遗留：时间显示口径不统一
 
-- [ ] `webui/routes/commands.py` 用 `iso_local(rule.updated_at.timestamp())` 显示时间，
+- [x] `webui/routes/commands.py` 用 `iso_local(rule.updated_at.timestamp())` 显示时间，
       而库里是 UTC（`func.now()`）→ 显示**比北京时间少 8 小时**
-- [ ] `webui/routes/plugins.py` / `permissions.py` 是裸 `isoformat()`（同样是 UTC 钟点）
-- [ ] 统一方案：对外统一用 `llm.fmt_dt()`（那是目前唯一正确的转换）
-- ⚠️ 改的时候要**连带回归**「命令管理 / 插件管理 / 黑白名单」三个页面
+- [x] `webui/routes/plugins.py` / `permissions.py` 是裸 `isoformat()`（同样是 UTC 钟点）
+- [x] 统一方案：对外统一用 `llm.fmt_dt()`（那是目前唯一正确的转换）
+- [x] 改的时候要**连带回归**「命令管理 / 插件管理 / 黑白名单」三个页面
 
 ### 4. 小加固
 
-- [ ] `webui/static/assets/app.js::pagePlugins` 加兜底：详情缺 `global_enabled` 时回落列表数据
+- [x] `webui/static/assets/app.js::pagePlugins` 加兜底：详情缺 `global_enabled` 时回落列表数据
       （后端已返回该字段，纯前端加固）
 
 ## 想法池（未定，先记着）
