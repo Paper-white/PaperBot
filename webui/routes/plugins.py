@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from src.core import pluginconf
 from src.core import registry, reload as reload_mod, service
+from src.core import llm
 from src.core.models import SCOPE_GLOBAL, SCOPE_TYPES
 from webui.deps import SECRET_PLACEHOLDER, mask_secret, require_token
 
@@ -70,9 +71,7 @@ async def plugin_detail(name: str) -> dict:
                 "scope_id": r.scope_id,
                 "enabled": r.enabled,
                 "updated_by": r.updated_by,
-                "updated_at": r.updated_at.isoformat(sep=" ", timespec="seconds")
-                if r.updated_at
-                else None,
+                "updated_at": llm.fmt_dt(r.updated_at) if r.updated_at else None,
             }
             for r in rules
         ],

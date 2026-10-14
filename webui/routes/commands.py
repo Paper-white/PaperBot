@@ -13,9 +13,9 @@ import nonebot
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core import registry, service
+from src.core import llm, registry, service
 from src.core.models import LEVEL_NAMES
-from webui.deps import iso_local, require_token
+from webui.deps import require_token
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["commands"])
 
@@ -120,7 +120,7 @@ async def list_commands() -> dict:
                     "editable": editable,
                     "updated_by": rule.updated_by if rule is not None else "",
                     "updated_at": (
-                        iso_local(rule.updated_at.timestamp())
+                        llm.fmt_dt(rule.updated_at)
                         if rule is not None and rule.updated_at is not None
                         else ""
                     ),

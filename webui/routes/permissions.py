@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from src.core import permission
+from src.core import llm
 from src.core.models import (
     LEVEL_ADMIN,
     LEVEL_BLACKLIST,
@@ -42,9 +43,7 @@ def _serialize(grant) -> dict[str, Any]:
         "level": grant.level,
         "level_name": _level_name(grant.level),
         "updated_by": grant.updated_by,
-        "updated_at": grant.updated_at.isoformat(sep=" ", timespec="seconds")
-        if grant.updated_at
-        else None,
+        "updated_at": llm.fmt_dt(grant.updated_at) if grant.updated_at else None,
     }
 
 
