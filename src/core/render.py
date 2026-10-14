@@ -22,7 +22,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import mimetypes
 import re
 from pathlib import Path
@@ -120,8 +119,41 @@ def default_footer(
     return f'<span class="line1">{line1}</span><span class="line2">{line2}</span>'
 
 
+# Markdown 图片语法：![alt](src "title")
+_IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+["\'][^"\']*["\'])?\s*\)')
+
+
+# 本地图片不再内联 base64：大图（如 OC 垫图）的 data URI 会超过 Chromium 的
+# CSS 解析上限，导致 background-image 被置空。改为「虚拟 URL + 路由拦截」：
+# 渲染前把本地文件注册成 http://paperbot.local/file/N，截图时用 page.route
+# 把该 URL 的响应替换成文件字节。
+VIRTUAL_ORIGIN = "http://paperbot.local"
+_local_resources: dict[str, tuple[bytes, str]] = {}  # 虚拟 URL -> (字节, mime)
+_local_url_by_path: dict[str, str] = {}  # 绝对路径 -> 虚拟 URL
+
+
+def _register_local_file(path: Path) -> str:
+    """把本地文件登记为虚拟 URL（同路径复用，避免重复读盘）。"""
+    key = str(path)
+    url = _local_url_by_path.get(key)
+    if url is not None:
+        return url
+    data = path.read_bytes()
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    url = f"{VIRTUAL_ORIGIN}/file/{len(_local_url_by_path)}"
+    _local_url_by_path[key] = url
+    _local_resources[url] = (data, mime)
+    return url
+
+
+async def _serve_local_file(route) -> None:  # noqa: ANN001 - playwright Route
+    """Playwright 路由：把虚拟 URL 的请求替换成已登记的本地文件字节。"""
+    data, mime = _local_resources.get(route.request.url, (b"", "application/octet-stream"))
+    await route.fulfill(status=200, content_type=mime, body=data)
+
+
 def _resolve_image(path_or_url: str) -> str:
-    """把本地图片路径转成 data URI（确保 ``set_content`` 下也能加载）。"""
+    """把本地图片路径转成可加载 URL（网络图 / data URI 原样保留）。"""
     src = path_or_url.strip()
     if src.startswith(("http://", "https://", "data:")):
         return src
@@ -131,13 +163,7 @@ def _resolve_image(path_or_url: str) -> str:
     if not p.is_file():
         logger.warning(f"图片不存在，已忽略：{p}")
         return ""
-    mime = mimetypes.guess_type(p.name)[0] or "image/png"
-    b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
-
-
-# Markdown 图片语法：![alt](src "title")
-_IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+["\'][^"\']*["\'])?\s*\)')
+    return _register_local_file(p)
 
 
 def inline_local_images(text: str) -> str:
@@ -297,6 +323,10 @@ async def render_html_to_png(
         device_scale_factor=scale,
     )
     try:
+        # 本地图片（含 OC 垫图）走虚拟 URL：把请求拦截后直接回文件字节。
+        # 不用 data URI 内联，避免大图 base64 撑爆 Chromium 的 CSS 解析。
+        if _local_resources:
+            await page.route(f"{VIRTUAL_ORIGIN}/**", _serve_local_file)
         await page.set_content(html, wait_until="load", timeout=timeout)
         target = page.locator(selector).first
         await target.wait_for(state="visible", timeout=timeout)
