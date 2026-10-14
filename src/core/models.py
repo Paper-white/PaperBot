@@ -196,6 +196,41 @@ LLM_PRESET_MANUAL = "manual"
 LLM_FACT_AUTO = "auto"
 LLM_FACT_MANUAL = "manual"
 
+# 消息类型（聊天流水表）
+CHAT_TYPE_GROUP = "group"
+CHAT_TYPE_PRIVATE = "private"
+CHAT_TYPES = (CHAT_TYPE_GROUP, CHAT_TYPE_PRIVATE)
+
+
+class ChatMessage(Base):
+    """聊天记录（原始流水层，独立于 LLM 会话上下文）。
+
+    由 `src/core/chatlog.py` 的全局事件钩子写入，客观记录「谁、在哪个群/私聊、
+    什么时候、说了什么」。记忆提炼 / 群聊上下文注入 / 未来插件与 AI 工具调用
+    都从这里取素材。只存**纯文本 + 元信息**（原始 CQ 消息不入库）。
+    """
+
+    __tablename__ = "chat_message"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    platform: Mapped[str] = mapped_column(String(16), default="onebot11")
+    message_type: Mapped[str] = mapped_column(String(16), default=CHAT_TYPE_GROUP, index=True)
+    group_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    nickname: Mapped[str] = mapped_column(String(128), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    # 协议端消息 id（用于去重）
+    message_id: Mapped[str] = mapped_column(String(64), default="")
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        where = self.group_id if self.message_type == CHAT_TYPE_GROUP else "private"
+        who = "bot" if self.is_bot else self.user_id
+        return f"<ChatMessage {where} {who}: {self.content[:20]!r}>"
+
 
 class LlmProvider(Base):
     """LLM 服务商配置（OpenAI 兼容，可存多套 + 指定默认）。
@@ -280,6 +315,8 @@ class LlmSession(Base):
     provider_name: Mapped[str] = mapped_column(String(64), default="")
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     user_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 上下文压缩后的历史摘要（超出保留窗口的旧消息被压成这里的一段文本）
+    summary: Mapped[Optional[str]] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -321,6 +358,8 @@ class LlmUserProfile(Base):
     impression: Mapped[str] = mapped_column(Text, default="")
     # 提炼时该用户累计的（个人上下文）消息数，用于判断「有没有新料」
     message_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 个人记忆水位线：只总结 id 大于该值的消息（跨私聊/群聊，全局递增）
+    last_msg_id: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     impression_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -328,6 +367,26 @@ class LlmUserProfile(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return f"<LlmUserProfile {self.user_id} {self.impression[:20]!r}>"
+
+
+class LlmGroupProfile(Base):
+    """群记忆（每个群一条）：由 LLM 从群聊增量里提炼的共同话题/群梗/正在进行的事。"""
+
+    __tablename__ = "llm_group_profile"
+    __table_args__ = (UniqueConstraint("group_id", name="uq_llm_group_profile"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    group_id: Mapped[str] = mapped_column(String(64), index=True)
+    memory: Mapped[str] = mapped_column(Text, default="")
+    # 群记忆水位线：只总结 id 大于该值的群消息
+    last_msg_id: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<LlmGroupProfile {self.group_id} {self.memory[:20]!r}>"
 
 
 class LlmUserFact(Base):

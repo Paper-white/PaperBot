@@ -129,9 +129,30 @@ class Settings(BaseSettings):
     # 多轮上下文保留轮数（1 轮 = 一问一答；0 = 不带历史）
     llm_context_rounds: int = 10
     # 每累计 N 条用户消息，触发一次「印象 / 关键信息」提炼（<=0 关闭自动提炼）
+    # ⚠️ 已被定时总结（scheduler）取代：保留该键仅兼容旧 .env，不再生效。
     llm_impression_every: int = 10
     # 注入 prompt 的关键信息条数上限
     llm_max_facts: int = 30
+
+    # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
+    # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。
+    chatlog_enable: bool = True
+
+    # ============ 定时记忆总结 + 上下文压缩（见 src/core/scheduler.py） ============
+    # 总开关：关闭后不跑定时总结与压缩
+    llm_summary_enable: bool = True
+    # 总结周期（秒）
+    llm_summary_interval: int = 1800
+    # 总结用服务商（留空 = 用默认服务商）
+    llm_summary_provider: str = ""
+    # 总结用模型（留空 = 用服务商首选；建议填便宜模型）
+    llm_summary_model: str = ""
+    # 单次总结最多取多少条增量（超过则只取最近这些，水位线直推最新）
+    llm_summary_max_msgs: int = 300
+    # 会话未压缩消息达到该条数时，把旧消息压进 llm_session.summary
+    llm_compress_threshold: int = 40
+    # 群聊上下文注入时从 chat_message 取最近多少条群消息
+    llm_group_context_msgs: int = 10
 
     # ============ 版本控制（WebUI 设置页「一键更新」，见 src/core/vcs.py） ============
     # 用途：本地开发机 push → 服务器生产环境在 WebUI 点一下拉取最新代码

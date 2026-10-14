@@ -34,7 +34,7 @@ from typing import Any, AsyncIterator, Callable, Iterable, Optional, Sequence
 
 import httpx
 import nonebot
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.config import settings
 from src.core.database import get_session
@@ -47,6 +47,7 @@ from src.core.models import (
     LLM_SCOPE_GROUP,
     LLM_SCOPE_USER,
     LLM_SCOPES,
+    LlmGroupProfile,
     LlmMessage,
     LlmPreset,
     LlmProvider,
@@ -1180,6 +1181,7 @@ def _session_row_dict(row: LlmSession) -> dict:
         "provider_name": row.provider_name or "",
         "message_count": row.message_count or 0,
         "user_message_count": row.user_message_count or 0,
+        "summary": row.summary or "",
         "created_at": fmt_dt(row.created_at),
         "updated_at": fmt_dt(row.updated_at),
     }
@@ -1764,6 +1766,323 @@ async def refresh_profile(
         return {"ok": False, "error": str(exc)}
 
 
+# ============================== 群记忆 ==============================
+
+
+async def get_group_profile(group_id: str | int) -> dict:
+    """取群记忆（共同话题/群梗/正在进行的事）。"""
+    gid = str(group_id)
+    async with get_session(readonly=True) as session:
+        row = (
+            await session.execute(
+                select(LlmGroupProfile).where(LlmGroupProfile.group_id == gid).limit(1)
+            )
+        ).scalar_one_or_none()
+    return {
+        "group_id": gid,
+        "memory": row.memory if row else "",
+        "last_msg_id": row.last_msg_id if row else 0,
+        "message_count": row.message_count if row else 0,
+        "updated_at": fmt_dt(row.updated_at) if row else "",
+    }
+
+
+async def list_group_profiles(limit: int = 200) -> list[dict]:
+    """列出所有群记忆（最近更新的排前面，WebUI 用）。"""
+    async with get_session(readonly=True) as session:
+        rows = (
+            (
+                await session.execute(
+                    select(LlmGroupProfile)
+                    .order_by(LlmGroupProfile.updated_at.desc())
+                    .limit(max(1, limit))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "group_id": r.group_id,
+            "memory": r.memory or "",
+            "last_msg_id": r.last_msg_id or 0,
+            "message_count": r.message_count or 0,
+            "updated_at": fmt_dt(r.updated_at),
+        }
+        for r in rows
+    ]
+
+
+def build_group_memory_block(profile: dict) -> str:
+    """把群记忆拼成注入 system 的提示词（空记忆返回空串）。"""
+    if not profile:
+        return ""
+    memory = (profile.get("memory") or "").strip()
+    if not memory:
+        return ""
+    return (
+        "以下是这个群过往聊天积累的共同记忆（话题/群梗/约定），"
+        "只在自然合适时使用，不要逐条复述、不要暴露你在「读取记忆」：\n" + memory
+    )
+
+
+async def set_group_memory(
+    group_id: str | int,
+    memory: str,
+    *,
+    last_msg_id: Optional[int] = None,
+    message_count: Optional[int] = None,
+) -> dict:
+    """写入群记忆（供定时总结 / WebUI 人工维护）。"""
+    gid = str(group_id)
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(LlmGroupProfile).where(LlmGroupProfile.group_id == gid).limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = LlmGroupProfile(group_id=gid)
+            session.add(row)
+        row.memory = memory or ""
+        if last_msg_id is not None:
+            row.last_msg_id = int(last_msg_id)
+        if message_count is not None:
+            row.message_count = int(message_count)
+        await session.commit()
+        await session.refresh(row)
+    return await get_group_profile(gid)
+
+
+# ============================== 定时总结（增量提炼） ==============================
+
+_GROUP_SUMMARY_PROMPT = """你是一个群聊信息总结助手。下面是一个 QQ 群自上次总结以来的新消息，
+以及此前已记录过的群共同记忆。请更新记忆。
+
+只输出**严格 JSON**（不要代码块、不要解释），格式：
+{{"memory": "200 字以内的群共同记忆（正在聊的话题、群梗、约定、重要事件）", "topics": ["话题1", "话题2"]}}
+
+要求：
+- 只写消息中能确认的信息，不要编造；
+- memory 要连贯自然，用第三人称描述群的状态；
+- topics 最多 5 个，没有就空数组。
+
+【旧记忆】{old}
+【近期群消息】
+{convo}"""
+
+
+async def _summary_cfg() -> ProviderConfig:
+    """总结/压缩用的服务商配置（未单独配置时回落到默认）。"""
+    name = (settings.llm_summary_provider or "").strip()
+    model = (settings.llm_summary_model or "").strip()
+    cfg = await resolve_provider(name or None)
+    if model:
+        cfg.model = model
+    return cfg
+
+
+async def summarize_user(user_id: str | int) -> dict:
+    """从聊天流水里提炼某用户的个人记忆（印象 + 关键信息，增量）。
+
+    素材来自 `chat_message`（该用户所有发言），水位线 `llm_user_profile.last_msg_id`。
+    失败只记日志，不推进水位线（下次重试）。
+    """
+    from src.core import chatlog
+
+    uid = str(user_id)
+    profile_row = await get_profile(uid)
+    watermark = int(profile_row.get("last_msg_id") or 0)
+    try:
+        cfg = await _summary_cfg()
+        msgs = await chatlog.messages_since(
+            user_id=uid, watermark=watermark, limit=settings.llm_summary_max_msgs
+        )
+        msgs = [m for m in msgs if not m.get("is_bot")]
+        if not msgs:
+            return {"ok": True, "reason": "没有增量", "user_id": uid}
+        old_impression = profile_row.get("impression") or ""
+        old_facts = profile_row.get("facts") or []
+        facts_text = (
+            "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in old_facts)
+            if old_facts
+            else "（暂无）"
+        )
+        convo = "\n".join(
+            f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}"
+            for m in msgs
+        )
+        prompt = _IMPRESSION_PROMPT.format(
+            old=old_impression or "（暂无）", old_facts=facts_text, convo=convo
+        )
+        res = await client().complete(
+            cfg,
+            [{"role": "user", "content": prompt}],
+            {"temperature": 0.2, "max_tokens": 700},
+        )
+        data = _extract_json(res.text)
+        impression = str(data.get("impression") or "").strip() or old_impression
+        await set_impression(uid, impression)
+        manual_keys = {f.get("key") for f in old_facts if f.get("source") == LLM_FACT_MANUAL}
+        raw_facts = data.get("facts")
+        if isinstance(raw_facts, list):
+            for item in raw_facts:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("key") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if not key or not value or key in manual_keys:
+                    continue
+                await set_fact(uid, key, value, source=LLM_FACT_AUTO)
+        # 推进水位线（以本次取到的最后一条为准）
+        await set_impression(uid, impression, count=len(msgs))
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                row.last_msg_id = int(msgs[-1]["id"])
+                await session.commit()
+        logger.info(f"已提炼用户 {uid} 的个人记忆（增量 {len(msgs)} 条）")
+        return {"ok": True, "user_id": uid, "count": len(msgs), "model": res.model}
+    except Exception as exc:  # noqa: BLE001 - 提炼失败不能影响聊天
+        logger.warning(f"提炼用户 {uid} 的个人记忆失败：{exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+async def summarize_group(group_id: str | int) -> dict:
+    """从聊天流水里提炼某群的共同记忆（增量）。
+
+    素材来自 `chat_message`（该群所有消息），水位线 `llm_group_profile.last_msg_id`。
+    """
+    from src.core import chatlog
+
+    gid = str(group_id)
+    profile = await get_group_profile(gid)
+    watermark = int(profile.get("last_msg_id") or 0)
+    try:
+        cfg = await _summary_cfg()
+        msgs = await chatlog.messages_since(
+            group_id=gid, watermark=watermark, limit=settings.llm_summary_max_msgs
+        )
+        if not msgs:
+            return {"ok": True, "reason": "没有增量", "group_id": gid}
+        convo = "\n".join(
+            f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}"
+            for m in msgs
+        )
+        prompt = _GROUP_SUMMARY_PROMPT.format(
+            old=profile.get("memory") or "（暂无）", convo=convo
+        )
+        res = await client().complete(
+            cfg,
+            [{"role": "user", "content": prompt}],
+            {"temperature": 0.2, "max_tokens": 700},
+        )
+        data = _extract_json(res.text)
+        memory = str(data.get("memory") or "").strip() or (profile.get("memory") or "")
+        await set_group_memory(
+            gid,
+            memory,
+            last_msg_id=int(msgs[-1]["id"]),
+            message_count=len(msgs),
+        )
+        logger.info(f"已提炼群 {gid} 的共同记忆（增量 {len(msgs)} 条）")
+        return {"ok": True, "group_id": gid, "count": len(msgs), "model": res.model}
+    except Exception as exc:  # noqa: BLE001 - 提炼失败不能影响聊天
+        logger.warning(f"提炼群 {gid} 的共同记忆失败：{exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+# ============================== 上下文压缩 ==============================
+
+_COMPRESS_PROMPT = """你是一个对话摘要助手。把下面这段对话压缩成一段连贯的摘要，
+保留关键信息（事实、决定、话题、语气），丢弃寒暄与重复。
+
+只输出摘要正文，不要标题、不要代码块、不要解释。
+
+【对话】
+{convo}"""
+
+
+async def compress_session(session_id: int) -> dict:
+    """把某会话「超出保留窗口的旧消息」压进 `llm_session.summary`。
+
+    保留最近 `LLM_COMPRESS_THRESHOLD` 条原文，更早的交给模型压成摘要
+    并合并到已有 summary；返回 {"ok", "compressed", "kept"}。
+    """
+    try:
+        cfg = await _summary_cfg()
+        async with get_session() as session:
+            sess = (
+                await session.execute(
+                    select(LlmSession).where(LlmSession.id == session_id).limit(1)
+                )
+            ).scalar_one_or_none()
+            if sess is None:
+                return {"ok": False, "error": "会话不存在"}
+            # 实际消息数（不依赖可能不准的 message_count）
+            total = int(
+                (
+                    await session.execute(
+                        select(func.count(LlmMessage.id)).where(
+                            LlmMessage.session_id == session_id
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            threshold = int(settings.llm_compress_threshold or 0)
+            if threshold <= 0 or total <= threshold:
+                return {"ok": True, "compressed": 0, "kept": total}
+
+            # 取最旧的（需要压缩的部分）
+            old_rows = (
+                (
+                    await session.execute(
+                        select(LlmMessage)
+                        .where(LlmMessage.session_id == session_id)
+                        .order_by(LlmMessage.id.asc())
+                        .limit(max(0, total - threshold))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not old_rows:
+                return {"ok": True, "compressed": 0, "kept": total}
+            convo = "\n".join(
+                f"{m.role}：{(m.content or '')[:400]}" for m in old_rows
+            )
+            prompt = _COMPRESS_PROMPT.format(convo=convo)
+            res = await client().complete(
+                cfg,
+                [{"role": "user", "content": prompt}],
+                {"temperature": 0.2, "max_tokens": 600},
+            )
+            digest = (res.text or "").strip()
+            if not digest:
+                return {"ok": False, "error": "压缩返回为空"}
+
+            old_summary = sess.summary or ""
+            sess.summary = f"{old_summary}\n{digest}".strip() if old_summary else digest
+            # 删除已压缩的原文，保留最近 threshold 条
+            from sqlalchemy import delete
+
+            await session.execute(
+                delete(LlmMessage).where(LlmMessage.id.in_([m.id for m in old_rows]))
+            )
+            sess.message_count = max(0, total - len(old_rows))
+            await session.commit()
+        logger.info(f"会话 {session_id} 已压缩 {len(old_rows)} 条旧消息")
+        return {"ok": True, "compressed": len(old_rows), "kept": total - len(old_rows)}
+    except Exception as exc:  # noqa: BLE001 - 压缩失败不能影响聊天
+        logger.warning(f"压缩会话 {session_id} 失败：{exc}")
+        return {"ok": False, "error": str(exc)}
+
+
 # ============================== 核心调用 ==============================
 
 
@@ -1823,12 +2142,27 @@ async def _build_request(
     if preset_data:
         sys_parts.append(preset_data["system_prompt"])
 
-    # 长期记忆：仅 user 作用域注入
+    # 长期记忆注入
     use_memory = settings.llm_memory_enable if memory is None else bool(memory)
     if scope_type == LLM_SCOPE_USER and scope_key and use_memory:
+        # 个人对话：注入个人记忆（印象 + 关键信息）
         block = build_memory_block(await get_profile(scope_key))
         if block:
             sys_parts.append(block)
+    elif scope_type == LLM_SCOPE_GROUP and scope_key and use_memory:
+        # 群聊：注入群记忆 + 当前发言者的个人记忆（由 paperbot_chat 通过 sender_id 传入）
+        group_block = build_group_memory_block(await get_group_profile(scope_key))
+        if group_block:
+            sys_parts.append(group_block)
+        sender_id = (extra or {}).get("_sender_id") if extra else None
+        if sender_id:
+            sender_block = build_memory_block(await get_profile(str(sender_id)))
+            if sender_block:
+                sys_parts.append(f"【当前发言者的个人记忆】\n{sender_block}")
+        # 会话压缩摘要（若之前压缩过，补充进 system）
+        info = await find_session(LLM_SCOPE_GROUP, scope_key, plugin or "")
+        if info and (info.get("summary") or "").strip():
+            sys_parts.append(f"【更早的对话摘要】\n{info['summary']}")
 
     convo: list[dict] = []
     for msg in conv:
@@ -1845,7 +2179,8 @@ async def _build_request(
         "model": model,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "extra": dict(extra or {}),
+        # 内部键（`_` 开头）只用于框架传递信息（如发言者 id），不透传给模型
+        "extra": {k: v for k, v in (extra or {}).items() if not str(k).startswith("_")},
     }
     return {
         "cfg": cfg,
@@ -1887,7 +2222,7 @@ async def _touch_session(session_id: int, *, preset_name: str = "", provider_nam
 
 
 async def _persist_turn(req: dict, *, session_id: Optional[int], reply: str) -> None:
-    """落库本轮对话，并在累计够轮数时后台刷新长期记忆。"""
+    """落库本轮对话（记忆提炼改由 scheduler 定时任务负责，不在这里同步触发）。"""
     if not session_id:
         return
     to_write = list(req["convo"])
@@ -1897,24 +2232,15 @@ async def _persist_turn(req: dict, *, session_id: Optional[int], reply: str) -> 
     await _touch_session(
         session_id, preset_name=req["preset"], provider_name=req["cfg"].name or ""
     )
-    if req["scope"] != LLM_SCOPE_USER or not req["scope_id"]:
-        return
-    if not settings.llm_memory_enable:
-        return
-    every = int(settings.llm_impression_every or 0)
-    if every <= 0:
-        return
-    info = await find_session(LLM_SCOPE_USER, req["scope_id"], req["plugin"])
-    profile = await get_profile(req["scope_id"])
-    if info and (info["user_message_count"] - (profile.get("message_count") or 0)) >= every:
-        # 只有 DB 服务商才按名传（`env` 是 .env 兜底的虚拟名，别当查询条件）
-        provider_name = req["cfg"].name if req["cfg"].source == "db" else None
-        await refresh_profile(req["scope_id"], provider=provider_name)
 
 
 async def _prepare_context(req: dict) -> tuple[Optional[int], list[dict]]:
-    """按需建会话并取出历史（无作用域 → 无历史）。"""
-    if not req["scope"]:
+    """按需建会话并取出历史（无作用域 → 无历史）。
+
+    群聊（group scope）不走 llm_session：群上下文由 chatlog（chat_message）
+    在插件层注入，避免一份历史存两处。这里只对 user scope 建会话。
+    """
+    if not req["scope"] or req["scope"] == LLM_SCOPE_GROUP:
         return None, []
     info = await ensure_session(
         req["scope"], req["scope_id"], req["plugin"], preset_name=req["preset"]
@@ -2141,6 +2467,23 @@ class PluginLLM:
             scope_id=str(scope_id),
             plugin_name=self.plugin_name,
         )
+
+    # --- 群记忆 ---
+    async def group_profile(self, group_id: str | int) -> dict:
+        return await get_group_profile(group_id)
+
+    async def set_group_memory(self, group_id: str | int, memory: str) -> dict:
+        return await set_group_memory(group_id, memory)
+
+    # --- 定时总结 / 压缩（一般由 scheduler 调用，插件也可手动触发） ---
+    async def summarize_user(self, user_id: str | int) -> dict:
+        return await summarize_user(user_id)
+
+    async def summarize_group(self, group_id: str | int) -> dict:
+        return await summarize_group(group_id)
+
+    async def compress_session(self, session_id: int) -> dict:
+        return await compress_session(session_id)
 
     # --- 元信息 ---
     async def available(self) -> bool:

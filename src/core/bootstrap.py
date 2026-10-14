@@ -5,7 +5,7 @@ from __future__ import annotations
 import nonebot
 
 from src.config import settings
-from src.core import hooks, llm, registry
+from src.core import hooks, llm, registry, scheduler
 from src.core.database import dispose_db, init_db
 from src.core.logging import shutdown_file_logging
 from src.core.render import shutdown_renderer
@@ -92,13 +92,23 @@ async def on_startup() -> None:
     await sync_plugin_info()
     await _load_plugin_configs()
     await _load_llm_presets()
+
+    # 注册聊天记录全局钩子（在插件 on_load 之前，保证消息都进 chat_message）
+    from src.core import chatlog
+
+    chatlog.install_chatlog()
+
     fired = await hooks.fire_all("load", reason="startup")
     if fired:
         logger.info(f"已触发 {fired} 个插件的 on_load 钩子")
 
+    # 启动定时记忆总结 + 上下文压缩（后台任务，不阻塞）
+    await scheduler.start_scheduler()
+
 
 async def on_shutdown() -> None:
-    # 先让插件自己收尾（关定时任务 / 落库），再动数据库与渲染器
+    # 先停后台任务，再让插件自己收尾（关定时任务 / 落库），最后动数据库与渲染器
+    await scheduler.stop_scheduler()
     fired = await hooks.fire_all("unload", reason="shutdown")
     if fired:
         logger.info(f"已触发 {fired} 个插件的 on_unload 钩子")
