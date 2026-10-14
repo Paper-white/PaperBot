@@ -28,7 +28,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterable, Optional, Sequence
 
@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 
 from src.config import settings
 from src.core.database import get_session
+from src.core.textutil import CST, fmt_dt  # noqa: F401 - 对外兼容导出
 from src.core.models import (
     LLM_FACT_AUTO,
     LLM_FACT_MANUAL,
@@ -71,22 +72,13 @@ ENV_PROVIDER_NAME = "env"
 # 单个服务商最多可配置的模型数（优先 + 备用）
 MAX_MODELS = 3
 
-# 数据库里的时间统一按 UTC 存（SQLite 的 func.now() 就是 UTC），对外展示时换算成本地时区
-CST = timezone(timedelta(hours=8))
+# 数据库里的时间统一按 UTC 存（SQLite 的 func.now() 就是 UTC），对外展示时换算成本地时区。
+# ℹ️ CST / fmt_dt 已抽到 `src.core.textutil`（顶部重新导出）。
 
 
 def _utcnow() -> datetime:
     """当前 UTC 时间（naive，与 SQLite `func.now()` 保持一致）。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def fmt_dt(value: Optional[datetime]) -> str:
-    """库里的 UTC 时间 → 本地（北京时间）字符串，空值返回空串。"""
-    if value is None:
-        return ""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(CST).isoformat(sep=" ", timespec="seconds")
 
 
 def _validate_provider_fields(

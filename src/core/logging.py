@@ -17,6 +17,7 @@ from pathlib import Path
 import nonebot
 
 from src.config import BASE_DIR, settings
+from src.core.textutil import human_size  # noqa: F401 - 对外转出兼容别名
 
 logger = nonebot.logger
 
@@ -45,16 +46,6 @@ def current_log_file() -> Path | None:
 
 def _stamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
-
-
-def human_size(num_bytes: float) -> str:
-    """字节数 → 人类可读。"""
-    size = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} GB"
 
 
 def _safe_file(name: str) -> Path:

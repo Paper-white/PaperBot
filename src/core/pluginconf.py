@@ -189,9 +189,9 @@ def coerce(field: dict[str, Any], value: Any) -> Any:
 # --------------------------------------------------------------------------- #
 def _now_text() -> str:
     """当前北京时间字符串（给 `_updated_at` 用，与 LLM 页展示口径一致）。"""
-    from datetime import datetime, timedelta, timezone
+    from src.core.textutil import now_text
 
-    return datetime.now(timezone(timedelta(hours=8))).isoformat(sep=" ", timespec="seconds")
+    return now_text()
 
 
 def read_file(plugin_name: str) -> dict[str, Any]:

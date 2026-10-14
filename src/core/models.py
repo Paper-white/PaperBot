@@ -50,6 +50,11 @@ LEVEL_NAMES = {
 }
 
 
+def level_name(level: int) -> str:
+    """权限等级 → 中文名（未知等级回落成数字字符串）。"""
+    return LEVEL_NAMES.get(int(level), str(level))
+
+
 class Base(DeclarativeBase):
     """所有 ORM 模型的公共基类。"""
 

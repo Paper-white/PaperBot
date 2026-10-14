@@ -169,9 +169,9 @@ def write_env(updates: dict[str, Any]) -> list[str]:
 
 
 def _now_text() -> str:
-    from datetime import datetime, timedelta, timezone
+    from src.core.textutil import now_text
 
-    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    return now_text()
 
 
 def redact(values: Iterable[str]) -> dict[str, str]:

@@ -17,21 +17,17 @@ from src.core import llm
 from src.core.models import (
     LEVEL_ADMIN,
     LEVEL_BLACKLIST,
-    LEVEL_NAMES,
     LEVEL_OWNER,
     LEVEL_USER,
     SCOPE_GLOBAL,
     SCOPE_GROUP,
+    level_name as _level_name,
 )
 from webui.deps import require_token
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["permissions"])
 
 VALID_LEVELS = (LEVEL_BLACKLIST, LEVEL_USER, LEVEL_ADMIN, LEVEL_OWNER)
-
-
-def _level_name(level: int) -> str:
-    return LEVEL_NAMES.get(int(level), str(level))
 
 
 def _serialize(grant) -> dict[str, Any]:

@@ -14,19 +14,15 @@ from sqlalchemy import select
 from src.core import permission
 from src.core.database import get_session
 from src.core.models import (
-    LEVEL_NAMES,
     SCOPE_GLOBAL,
     SCOPE_GROUP,
     PluginRule,
     UserPermission,
+    level_name as _level_name,
 )
 from webui.deps import call_api, online_bots, require_token
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["groups"])
-
-
-def _level_name(level: int) -> str:
-    return LEVEL_NAMES.get(int(level), str(level))
 
 
 async def _db_group_index() -> dict[str, dict[str, list]]:

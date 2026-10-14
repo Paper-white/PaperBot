@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import nonebot
@@ -23,23 +23,13 @@ from sqlalchemy import select
 from src.config import settings
 from src.core.database import get_session
 from src.core.models import CHAT_TYPE_GROUP, CHAT_TYPE_PRIVATE, ChatMessage
+from src.core.textutil import CST, fmt_dt  # noqa: F401 - fmt_dt 对外兼容导出
 
 logger = nonebot.logger
-
-CST = timezone(timedelta(hours=8))
 
 # 最近见过的协议端消息 id（内存去重，避免 bot 自己的消息回显被记两次）
 _seen_ids: set[str] = set()
 _SEEN_MAX = 2000
-
-
-def fmt_dt(value: Optional[datetime]) -> str:
-    """库里的 UTC 时间 → 北京时间字符串（与 llm.fmt_dt 同规则）。"""
-    if value is None:
-        return ""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(CST).isoformat(sep=" ", timespec="seconds")
 
 
 def _row_dict(row: ChatMessage) -> dict:

@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from src.config import settings
 from src.core.database import get_session
-from webui.deps import human_size, require_token
+from webui.deps import require_token, sqlite_db_size
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["database"])
 
@@ -62,18 +62,13 @@ def _ensure_table(name: str, allowed: list[str]) -> str:
 async def database_overview() -> dict:
     """数据库概览：文件信息 + 表清单（行数 / 列名）。"""
     path = _db_file()
-    size = 0
-    mtime = None
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            stat = os.stat(path + suffix)
-            size += stat.st_size
-            if suffix == "":
-                mtime = datetime.fromtimestamp(stat.st_mtime).isoformat(
-                    sep=" ", timespec="seconds"
-                )
-        except OSError:
-            continue
+    size, size_text = sqlite_db_size(path)
+    try:
+        mtime = datetime.fromtimestamp(os.stat(path).st_mtime).isoformat(
+            sep=" ", timespec="seconds"
+        )
+    except OSError:
+        mtime = None
 
     async with get_session(readonly=True) as session:
         journal = str((await session.execute(text("PRAGMA journal_mode"))).scalar_one())
@@ -108,7 +103,7 @@ async def database_overview() -> dict:
             "path": path,
             "exists": os.path.exists(path),
             "size_bytes": size,
-            "size_text": human_size(size),
+            "size_text": size_text,
             "modified_at": mtime,
         },
         "engine": {"dialect": "sqlite", "journal_mode": journal, "version": sqlite_version},

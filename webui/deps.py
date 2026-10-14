@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from typing import Any, Optional
 
 import nonebot
 from fastapi import Header, HTTPException
 
 from src.config import settings
+from src.core.textutil import human_duration, human_size  # noqa: F401 - 对外转出兼容别名
+from src.core.textutil import fmt_ts as iso_local
 
 logger = nonebot.logger
 
@@ -71,36 +73,8 @@ async def call_api(action: str, **params: Any) -> Any:
 # --------------------------------------------------------------------------- #
 # 小工具
 # --------------------------------------------------------------------------- #
-def iso_local(ts: float) -> str:
-    """时间戳 → 北京时间 ISO 字符串。"""
-    return datetime.fromtimestamp(ts, CST).isoformat(timespec="seconds")
-
-
-def human_duration(seconds: float) -> str:
-    """秒数 → 「1 天 2 小时 3 分 4 秒」。"""
-    seconds = max(0, int(seconds))
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, secs = divmod(rem, 60)
-    parts = []
-    if days:
-        parts.append(f"{days} 天")
-    if hours or days:
-        parts.append(f"{hours} 小时")
-    if minutes or hours or days:
-        parts.append(f"{minutes} 分")
-    parts.append(f"{secs} 秒")
-    return " ".join(parts)
-
-
-def human_size(num_bytes: float) -> str:
-    """字节数 → 人类可读。"""
-    size = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} GB"
+# ℹ️ iso_local / human_duration / human_size 已抽到 `src.core.textutil`，
+#    本模块在顶部重新导出，保持原有 `from webui.deps import iso_local` 可用。
 
 
 def mask_secret(value: Optional[str]) -> dict[str, Any]:
@@ -111,3 +85,16 @@ def mask_secret(value: Optional[str]) -> dict[str, Any]:
         "configured": bool(text),
         "length": len(text),
     }
+
+
+def sqlite_db_size(db_path: str) -> tuple[int, str]:
+    """SQLite 主库 + `-wal` + `-shm` 的总字节数与可读文本。"""
+    import os
+
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            total += os.path.getsize(db_path + suffix)
+        except OSError:
+            continue
+    return total, human_size(total)
