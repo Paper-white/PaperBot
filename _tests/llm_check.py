@@ -322,6 +322,7 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     await llm.chat(
         [{"role": "user", "content": "你好"}], scope=llm.LLM_SCOPE_USER, scope_id="10001"
     )
+    # group scope 不再建 llm_session（群上下文改由 chatlog / chat_message 提供）
     await llm.chat(
         [{"role": "user", "content": "群里的大家好"}],
         scope=llm.LLM_SCOPE_GROUP,
@@ -329,7 +330,7 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     )
 
     sessions = (await client.get("/api/llm/sessions")).json()
-    check("GET /llm/sessions 列出两个会话", sessions["count"] == 2, str(sessions["count"]))
+    check("GET /llm/sessions 只列 user 会话（group 不再建 llm_session）", sessions["count"] == 1, str(sessions["count"]))
     user_sess = [s for s in sessions["items"] if s["scope_type"] == "user"][0]
     check("会话带中文作用域标签", user_sess["scope_label"] == "个人", str(user_sess["scope_label"]))
     check("会话消息数已累计", user_sess["message_count"] == 2, str(user_sess["message_count"]))
@@ -357,7 +358,7 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     check("删除后消息 404", (await client.get(f"/api/llm/sessions/{user_sess['id']}/messages")).status_code == 404)
 
     r = await client.delete("/api/llm/sessions?scope_type=group")
-    check("按作用域批量清空", r.status_code == 200 and r.json()["removed"] == 1, str(r.json()))
+    check("按作用域批量清空（group 无 llm_session）", r.status_code == 200 and r.json()["removed"] == 0, str(r.json()))
     check("非法作用域 → 400", (await client.delete("/api/llm/sessions?scope_type=x")).status_code == 400)
 
     print("=" * 68)
@@ -413,6 +414,41 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     await client.post("/api/llm/chat", json={"prompt": "hi", "preset": "cat"})
     system_prompt = fake.calls[0]["messages"][0]
     check("试聊按人设注入系统提示", system_prompt["role"] == "system" and "猫娘" in system_prompt["content"], system_prompt.get("content", "")[:20])
+
+    print("=" * 68)
+    print("五点五、聊天记录 / 群记忆 / 上下文压缩")
+    print("=" * 68)
+    from src.core import chatlog
+    from src.core.database import get_session
+    from src.core.models import ChatMessage
+
+    async with get_session() as session:
+        session.add(ChatMessage(message_type="group", group_id="999", user_id="111", nickname="甲", content="今天聊聊游戏", message_id="m1"))
+        session.add(ChatMessage(message_type="group", group_id="999", user_id="222", nickname="乙", content="好呀，最近在玩什么", message_id="m2"))
+        session.add(ChatMessage(message_type="private", group_id="", user_id="111", nickname="甲", content="私聊你一句", message_id="m3"))
+    recent = await chatlog.recent_messages("999", limit=5)
+    check("chatlog 取群最近消息", len(recent) == 2 and recent[0]["user_id"] == "111", str(recent))
+    since = await chatlog.messages_since(group_id="999", watermark=0)
+    check("chatlog 增量取群消息", len(since) == 2, str(len(since)))
+    by_user = await chatlog.messages_by_user("111")
+    check("chatlog 按用户取发言", len(by_user) == 2, str(len(by_user)))
+
+    gprofile = await llm.get_group_profile("999")
+    check("群记忆初始为空", gprofile["memory"] == "", gprofile["memory"])
+    await llm.set_group_memory("999", "群里最近在聊游戏")
+    gprofile = await llm.get_group_profile("999")
+    check("群记忆可写入", "游戏" in gprofile["memory"], gprofile["memory"])
+    check("群记忆列表可见", len(await llm.list_group_profiles()) == 1)
+
+    # 上下文压缩：建一个超阈值会话，压缩旧消息进 summary
+    sess = await llm.ensure_session("user", "10003")
+    for i in range(int(settings.llm_compress_threshold) + 5):
+        await llm.append_message(sess["id"], "user" if i % 2 == 0 else "assistant", f"msg{i}")
+    result = await llm.compress_session(sess["id"])
+    check("压缩会话返回 ok", result.get("ok") is True, str(result))
+    check("压缩掉旧消息", result.get("compressed", 0) > 0, str(result.get("compressed")))
+    info = await llm.get_session_by_id(sess["id"])
+    check("摘要已写入会话", bool(info and (info.get("summary") or "").strip()), str(info and info.get("summary")))
 
     print("=" * 68)
     print("六、真实 openai SDK 链路（本地假服务）")

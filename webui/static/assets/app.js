@@ -1511,12 +1511,14 @@
       api('/llm/presets'),
       api('/llm/sessions?limit=50'),
       api('/llm/users?limit=50'),
+      api('/llm/groups?limit=50'),
     ]).then(function (res) {
       var st = res[0];
       var prov = res[1];
       var presets = res[2];
       var sessions = res[3];
       var users = res[4];
+      var groups = res[5];
 
       var active = st.active_provider;
       var activeText = active
@@ -1531,7 +1533,12 @@
         stat('人设', st.preset_count, '默认：' + (st.default_preset || '未设置')) +
         stat('会话', st.session_count, '累计消息 ' + st.session_messages + ' 条') +
         stat('用户记忆', st.profile_count, '印象 + 关键信息') +
-        stat('流式 / 记忆', (st.stream_enable ? '开' : '关') + ' / ' + (st.memory_enable ? '开' : '关'), '上下文 ' + st.context_rounds + ' 轮 · 每 ' + st.impression_every + ' 条提炼印象') +
+        stat('群记忆', st.group_count || 0, '共同话题 / 群梗') +
+        '</div>' +
+        '<div class="grid">' +
+        stat('流式', st.stream_enable ? '开' : '关', '全局流式输出') +
+        stat('上下文', st.context_rounds + ' 轮', '个人 / 群聊上下文') +
+        stat('定时总结', (st.summary_enable ? '开' : '关'), st.summary_interval ? ('每 ' + st.summary_interval + ' 秒') : '已关闭') +
         '</div>' +
         '<div class="error-box warn">服务商与人设都存在数据库里，<b>改完即时生效</b>；' +
         '密钥只回显掩码，留着不动就不会被覆盖。若库里没有任何启用服务商，会回落到 ' +
@@ -1730,7 +1737,31 @@
         users.count + ' 位用户（最多列 50）'
       );
 
-      var html = overview + provCard + chatCard + presetCard + sessionCard + userCard;
+      var groupRows = groups.items.length
+        ? groups.items
+            .map(function (g) {
+              return (
+                '<tr><td class="mono">' + esc(g.group_id) + '</td>' +
+                '<td>' + esc((g.memory || '').slice(0, 120) || '（暂无）') + '</td>' +
+                '<td class="hint">' + g.message_count + ' 条</td>' +
+                '<td class="hint">' + esc(g.updated_at || '-') + '</td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="4" class="hint">还没有群记忆（聊一阵后由定时总结自动生成）</td></tr>';
+
+      var groupCard = card(
+        '群记忆',
+        '<div class="error-box warn">由后台定时任务（' + (st.summary_interval || 1800) +
+        ' 秒一轮）从群聊流水增量提炼的共同话题 / 群梗，可在「数据库管理」页查看 ' +
+        '<span class="mono">chat_message</span> 原始流水。</div>' +
+        '<div class="table-wrap"><table><thead><tr>' +
+          '<th>群</th><th>共同记忆</th><th>累计消息</th><th>更新</th>' +
+          '</tr></thead><tbody>' + groupRows + '</tbody></table></div>',
+        groups.count + ' 个群（最多列 50）'
+      );
+
+      var html = overview + provCard + chatCard + presetCard + sessionCard + userCard + groupCard;
       return html;
 
     });

@@ -259,8 +259,10 @@ enabled: true              # 可选：默认 true
 ### 5.1 上下文（短期）
 
 - 只有传了 `scope` + `scope_id` 才有上下文；按 `(作用域, 谁, 插件名)` 三元组建会话，各插件互不干扰。
-- 每轮请求自动带上最近 `LLM_CONTEXT_ROUNDS` 轮（1 轮 = 用户 + 助手）历史。
-- 超出轮数的老消息仍留在库里（WebUI 可见），只是不再进提示词。
+- **个人对话**（`scope="user"`）：每轮自动带最近 `LLM_CONTEXT_ROUNDS` 轮（1 轮 = 用户 + 助手）历史；
+- **群聊**（`scope="group"`）：**不再建 `llm_session`**，群上下文由 `chatlog`（`chat_message` 表）
+  提供——插件从聊天流水读最近 N 条群消息注入，避免一份历史存两处；
+- 超出轮数的老消息仍留在库里（WebUI 可见），只是不再进提示词；超阈值会被**压缩**进 `llm_session.summary`；
 - 想清空：QQ 侧由插件自己实现，WebUI 侧在「会话」卡片点删除 / 批量清空；插件内用 `clear_context()`。
 
 ### 5.1a 群聊「对话模式」（paperbot_chat 插件层实现）
@@ -269,25 +271,30 @@ enabled: true              # 可选：默认 true
 
 - 群里**艾特一次** bot → 开启该群的对话模式；之后**不用再艾特**，普通消息 bot 也会自动接话（带冷却防刷屏）；
 - 默认 **300 秒**没人说话自动关闭（`group_timeout` 可改，0 = 不超时）；`%ai 停` 手动关闭；
-- 自动接话时会把**最近 N 条群消息**（`group_history` 配置项，默认 10 条）拼进上下文，让回复更懂群聊氛围；
-- 群里始终共享同一个 `scope="group"` 会话（群上下文），不注入个人长期记忆。
+- 自动接话时从**聊天流水**（`chat_message`）读最近 N 条群消息（`group_history` 配置项）拼进上下文；
+- 群聊回复注入：**群记忆 + 当前发言者的个人记忆**（不是整个群所有人的记忆）。
 
-> 这是插件层的便利封装，底层仍是 `llm.ask(..., scope="group", scope_id=群号)`；不想要这层行为就把
-> `paperbot_chat` 的 `group_mode` 配置项关掉。
+### 5.2 长期记忆（印象 + 关键信息 + 群记忆）
 
-### 5.2 长期记忆（印象 + 关键信息）
-
-两样东西，都只对 `scope="user"` 生效：
+**个人记忆**（`scope="user"`，按 QQ 区分）：
 
 1. **印象（impression）**：一段 80 字以内的用户画像。
 2. **关键信息（facts）**：`key: value` 列表（称呼、偏好、身份、习惯、禁忌……）。
 
-**自动提炼**：某用户的新增用户消息累计到 `LLM_IMPRESSION_EVERY` 条（默认 10，按
-`用户消息数 - 上次提炼时的消息数` 计算）就后台跑一次 `refresh_profile()`，让模型输出严格 JSON：
-`{"impression": "...", "facts": [{"key": "...", "value": "..."}]}`。
-自动提炼出的信息带 `source=auto`，**不会覆盖人工记录**（`source=manual`）。
+**群记忆**（`scope="group"`，按群号区分）：一段共同话题/群梗/正在聊的事，存 `llm_group_profile`。
 
-**注入格式**（`build_memory_block`，拼在 system prompt 之后）：
+**自动提炼**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
+增量跑一轮：
+
+- 从 `chat_message`（聊天流水）取每个用户 / 每个群自水位线之后的新消息；
+- 用「总结模型」（`LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL`，未配置则用默认服务商）提炼；
+- 单次最多 `LLM_SUMMARY_MAX_MSGS` 条（超出只取最近，水位线直推最新）；
+- 写回 `llm_user_profile` / `llm_group_profile` 并推进水位线；
+- 全程后台运行，**不阻塞对话**；失败只记日志、不推进水位线（下一轮重试）。
+
+自动提炼出的关键信息带 `source=auto`，**不会覆盖人工记录**（`source=manual`）。
+
+**注入格式**（拼在 system prompt 之后）：
 
 ```
 以下是你与 ta 过往对话中积累的长期记忆，只在自然合适时使用，不要逐条复述、不要暴露你在「读取记忆」：
@@ -299,7 +306,16 @@ enabled: true              # 可选：默认 true
 
 - 上限 `LLM_MAX_FACTS`（默认 30）条关键信息。
 - 整体开关 `LLM_MEMORY_ENABLE`，单次可用 `memory=False` 关掉。
-- 群里（`scope="group"`）**不注入**个人记忆。
+- 群聊注入的是「群记忆 + 当前发言者个人记忆」。
+
+### 5.3 上下文压缩
+
+会话消息超过 `LLM_COMPRESS_THRESHOLD`（默认 40）条时，后台调度器把**超出保留窗口的旧消息**
+交给总结模型压成一段摘要，合并进 `llm_session.summary`；注入顺序：
+
+```
+人设 → 记忆（个人/群 + 发言者） → [更早的对话摘要] → 最近 N 轮原文
+```
 
 ---
 
@@ -307,12 +323,14 @@ enabled: true              # 可选：默认 true
 
 | 表 | 关键字段 | 唯一键 |
 |---|---|---|
+| `chat_message` | `message_type` / `group_id` / `user_id` / `nickname` / `content` / `message_id` / `is_bot` / `created_at` | —（原始聊天流水） |
 | `llm_provider` | `name` / `base_url` / `api_key` / `model` / `models`(JSON 数组，最多 3 个) / `priority` / `temperature` / `max_tokens` / `timeout` / `extra`(JSON) / `enabled` / `is_default` / `updated_by` / `updated_at` | `name` |
 | `llm_preset` | `name` / `display_name` / `description` / `system_prompt` / `params`(JSON) / `enabled` / `source` / `updated_by` / `updated_at` | `name` |
-| `llm_session` | `scope_type` / `scope_id` / `plugin_name` / `preset_name` / `provider_name` / `message_count` / `user_message_count` / `created_at` / `updated_at` | (`scope_type`,`scope_id`,`plugin_name`) |
+| `llm_session` | `scope_type` / `scope_id` / `plugin_name` / `preset_name` / `provider_name` / `message_count` / `user_message_count` / `summary` / `created_at` / `updated_at` | (`scope_type`,`scope_id`,`plugin_name`) |
 | `llm_message` | `session_id` / `role` / `content` / `name` / `created_at` | — |
-| `llm_user_profile` | `user_id` / `impression` / `message_count` / `impression_at` / `updated_at` | `user_id` |
+| `llm_user_profile` | `user_id` / `impression` / `message_count` / `last_msg_id` / `impression_at` / `updated_at` | `user_id` |
 | `llm_user_fact` | `user_id` / `fact_key` / `fact_value` / `source` / `updated_at` | (`user_id`,`fact_key`) |
+| `llm_group_profile` | `group_id` / `memory` / `last_msg_id` / `message_count` / `updated_at` | `group_id` |
 
 - 密钥是**明文存库**（与 `.env` 一致，本项目定位是自用机器人）；请勿把 `data/paperbot.db` 传出去。
 - `source` 取值：人设 `builtin/import/manual`；关键信息 `auto/manual`。

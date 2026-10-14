@@ -136,13 +136,15 @@ async def llm_status() -> dict:
     presets = await llm.list_presets()
     sessions = await llm.list_sessions(limit=1000)
     profiles = await llm.list_profiles(limit=1000)
+    group_profiles = await llm.list_group_profiles(limit=1000) if hasattr(llm, "list_group_profiles") else []
     return {
         "enable": settings.llm_enable,
         "available": await llm_available(),
         "stream_enable": settings.llm_stream_enable,
         "memory_enable": settings.llm_memory_enable,
         "context_rounds": settings.llm_context_rounds,
-        "impression_every": settings.llm_impression_every,
+        "summary_enable": settings.llm_summary_enable,
+        "summary_interval": settings.llm_summary_interval,
         "max_facts": settings.llm_max_facts,
         "default_preset": settings.llm_default_preset,
         "env_base_url": settings.llm_base_url,
@@ -153,6 +155,7 @@ async def llm_status() -> dict:
         "preset_count": len(presets),
         "session_count": len(sessions),
         "profile_count": len(profiles),
+        "group_count": len(group_profiles),
         "session_messages": sum(int(s.get("message_count") or 0) for s in sessions),
         "scope_labels": SCOPE_LABELS,
         "secret_placeholder": llm.SECRET_MASK,
@@ -493,6 +496,27 @@ async def clear_user(user_id: str) -> dict:
     removed = await llm.clear_profile(user_id)
     logger.info(f"WebUI：用户 {user_id} 的长期记忆已清空（{removed} 条）")
     return {"ok": True, "removed": removed, "message": f"已清空长期记忆（{removed} 条）"}
+
+
+# --------------------------------------------------------------------------- #
+# 群记忆
+# --------------------------------------------------------------------------- #
+@router.get("/llm/groups")
+async def list_group_profiles(limit: int = 100) -> dict:
+    """列出有群记忆的群（最近更新的排前面）。"""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit 需在 1~500 之间")
+    items = await llm.list_group_profiles(limit=limit)
+    return {"items": items, "count": len(items)}
+
+
+@router.put("/llm/groups/{group_id}/memory")
+async def set_group_memory(group_id: str, payload: dict) -> dict:
+    """人工改写某群的群记忆。"""
+    memory = str(payload.get("memory", "") or "").strip()
+    data = await llm.set_group_memory(group_id, memory)
+    logger.info(f"WebUI：群 {group_id} 的群记忆已更新（{len(memory)} 字）")
+    return {"ok": True, "item": data, "message": "群记忆已更新"}
 
 
 # --------------------------------------------------------------------------- #

@@ -90,14 +90,29 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MAX_TOKENS` | `0` | 最大输出（`0` = 不传该参数） |
 | `LLM_DEFAULT_PRESET` | 空 | 默认人设名（留空 = 不注入人设；内置示例 `paper_white`） |
 | `LLM_STREAM_ENABLE` | `false` | 全局流式开关（插件可逐次覆盖） |
-| `LLM_MEMORY_ENABLE` | `true` | 是否启用长期记忆（印象 + 关键信息） |
+| `LLM_MEMORY_ENABLE` | `true` | 是否启用长期记忆（印象 + 关键信息 + 群记忆） |
 | `LLM_CONTEXT_ROUNDS` | `10` | 上下文保留轮数（`0` = 不带历史） |
-| `LLM_IMPRESSION_EVERY` | `10` | 每累计 N 条用户消息触发一次印象提炼（`<=0` 关闭） |
 | `LLM_MAX_FACTS` | `30` | 注入提示词的关键信息条数上限 |
+
+> ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：
+> 记忆提炼改由「定时总结调度器」负责（见下面 1.8 小节）。
+
+### 1.8 聊天记录与定时总结
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `CHATLOG_ENABLE` | `true` | 全局钩子把收到的消息（群 + 私聊，含 bot）逐条写入 `chat_message` 表 |
+| `LLM_SUMMARY_ENABLE` | `true` | 定时记忆总结 + 上下文压缩总开关 |
+| `LLM_SUMMARY_INTERVAL` | `1800` | 总结周期（秒），默认 30 分钟 |
+| `LLM_SUMMARY_PROVIDER` | 空 | 总结用服务商（留空 = 默认服务商） |
+| `LLM_SUMMARY_MODEL` | 空 | 总结用模型（留空 = 服务商首选；建议填便宜模型） |
+| `LLM_SUMMARY_MAX_MSGS` | `300` | 单次总结最多取多少条增量（超出只取最近，水位线直推） |
+| `LLM_COMPRESS_THRESHOLD` | `40` | 会话消息超过该数时把旧消息压进 `llm_session.summary` |
+| `LLM_GROUP_CONTEXT_MSGS` | `10` | 群聊回复时从聊天流水取最近多少条群消息 |
 
 详见 [`llm.md`](llm.md)。
 
-### 1.7 版本控制（一键拉取云端版本）
+### 1.9 版本控制（一键拉取云端版本）
 
 > 用途：本地开发机 push → 服务器生产环境在 WebUI「设置」页点一下拉取最新代码。
 > 只拉不推，**不碰** `.config/` `data/` `logs/`。见 [`plans/05-version-control.md`](plans/05-version-control.md)。

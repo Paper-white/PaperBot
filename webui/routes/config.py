@@ -125,10 +125,31 @@ SECTIONS: list[dict[str, Any]] = [
             _field("LLM_STREAM_ENABLE", "默认流式输出", "bool", hint="插件显式传 use_stream 时以插件为准"),
             _field("LLM_MEMORY_ENABLE", "启用长期记忆", "bool", hint="关闭后不再注入印象 / 关键信息"),
             _field("LLM_CONTEXT_ROUNDS", "上下文轮数", "int", hint="1 轮 = 用户 + 助手"),
-            _field("LLM_IMPRESSION_EVERY", "每 N 条消息提炼印象", "int"),
             _field("LLM_MAX_FACTS", "最多注入几条关键信息", "int"),
             _field("LLM_TIMEOUT", "请求超时（秒）", "float"),
             _field("LLM_PROXY", "代理地址", hint="如 http://127.0.0.1:2080，留空直连"),
+        ],
+    },
+    {
+        "id": "chatlog",
+        "name": "聊天记录",
+        "note": "原始流水层：全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表，记忆提炼与群聊上下文都从这取",
+        "fields": [
+            _field("CHATLOG_ENABLE", "启用聊天记录", "bool", hint="关闭后不再落流水，记忆与群聊上下文也随之停止更新"),
+        ],
+    },
+    {
+        "id": "summary",
+        "name": "定时记忆总结与上下文压缩",
+        "note": "后台任务每 N 分钟增量总结个人/群记忆，并把超长会话压缩成摘要",
+        "fields": [
+            _field("LLM_SUMMARY_ENABLE", "启用定时总结", "bool"),
+            _field("LLM_SUMMARY_INTERVAL", "总结周期（秒）", "int", hint="默认 1800 = 30 分钟"),
+            _field("LLM_SUMMARY_PROVIDER", "总结用服务商", hint="留空 = 用默认服务商"),
+            _field("LLM_SUMMARY_MODEL", "总结用模型", hint="留空 = 服务商首选；建议填便宜模型"),
+            _field("LLM_SUMMARY_MAX_MSGS", "单次增量上限", "int", hint="超过只取最近这些，水位线直推最新"),
+            _field("LLM_COMPRESS_THRESHOLD", "触发压缩条数", "int", hint="会话消息超过该数时把旧消息压进摘要"),
+            _field("LLM_GROUP_CONTEXT_MSGS", "群聊注入上下文条数", "int", hint="群聊回复时从聊天流水取最近多少条"),
         ],
     },
     {
