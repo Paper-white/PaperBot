@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import nonebot
@@ -37,6 +38,9 @@ INDEX_FILE = STATIC_DIR / "index.html"
 ASSETS_DIR = STATIC_DIR / "assets"
 
 PREFIX_PLACEHOLDER = "%WEBUI_PREFIX%"
+
+# 启动时间戳用作静态资源缓存破坏参数：前端每次访问 /assets/app.js?v=<ts> 都会拉到最新
+_STATIC_VERSION = str(int(time.time()))
 
 # 允许直接用页面路径访问（例：http://127.0.0.1:6188/status），统一返回同一个单页
 PAGE_NAMES = (
@@ -130,11 +134,20 @@ def setup_webui() -> None:
     origin = f"http://{_display_host(host)}:{_driver_port()}"
     if INDEX_FILE.is_file():
         if ASSETS_DIR.is_dir():
-            app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="webui-assets")
+            # cache_control 用 public：强制浏览器每次请求都带 If-None-Match 重新校验
+            app.mount(
+                "/assets",
+                StaticFiles(directory=str(ASSETS_DIR)),
+                name="webui-assets",
+            )
 
         async def _page() -> HTMLResponse:  # pragma: no cover - 页面渲染
             html = INDEX_FILE.read_text(encoding="utf-8")
-            return HTMLResponse(html.replace(PREFIX_PLACEHOLDER, prefix))
+            html = html.replace(PREFIX_PLACEHOLDER, prefix)
+            # 给静态资源加版本参数 + 页面本身禁用缓存，改前端代码后刷新页面即可看到
+            html = html.replace("/assets/app.js", f"/assets/app.js?v={_STATIC_VERSION}")
+            html = html.replace("/assets/style.css", f"/assets/style.css?v={_STATIC_VERSION}")
+            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
         app.add_api_route("/", _page, methods=["GET"], include_in_schema=False)
         # 同时接受 /status、/config 这类路径（hash 路由之外的直达地址）
