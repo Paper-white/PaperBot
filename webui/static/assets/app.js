@@ -627,9 +627,17 @@
     return Promise.all([api('/plugins'), api('/groups')]).then(function (res) {
       var list = res[0];
       var groups = res[1];
+      // 列表数据带 global_enabled，详情若缺该字段就回落（后端已返回，纯前端加固）
+      var listById = {};
+      list.items.forEach(function (item) {
+        listById[item.name] = item;
+      });
       return Promise.all(
         list.items.map(function (p) {
           return api('/plugins/' + encodeURIComponent(p.name)).then(function (detail) {
+            if (detail.global_enabled === undefined && listById[detail.name]) {
+              detail.global_enabled = listById[detail.name].global_enabled;
+            }
             if (!detail.config_schema || !detail.config_schema.length) return detail;
             return api('/plugins/' + encodeURIComponent(p.name) + '/config').then(function (cfg) {
               detail.config = cfg;
