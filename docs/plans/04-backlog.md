@@ -11,16 +11,24 @@
 - [x] `pagePlugins` 前端兜底（详情缺 `global_enabled` 回落列表数据）
 - [x] 聊天记录原始流水层 + 定时记忆总结（个人/群双层）+ 上下文压缩
 - [x] echo 插件改为在线状态测试插件（`paperbot_ping`，`%ping` → `pong`）
+- [x] **WebUI 交互打磨（第一轮）**：状态页自动刷新、配置/日志分组浮窗、chips 列表输入、
+  群号下拉、长下拉搜索、命令大表、新增「日志」页；顺带抽公用（`textutil.py` + 前端 `mutate/on/openModal`）
+- [x] 主机资源监控（psutil）：状态页展示 CPU / 内存 / 本进程占用
 
 ## 待办（下一步候选）
 
 ### 1. 记忆 / 压缩真机验证
 
-- [ ] 重启后确认 `paperbot_ping` 正常加载（旧实例还是 `paperbot_echo`）
+- [x] 重启后确认插件正常加载（`paperbot_ping` 已上线）
 - [ ] 群里聊一阵 → 查 `chat_message` 有 sender_id / is_bot
-- [ ] 等一轮 scheduler → 查 `llm_user_profile` / `llm_group_profile` 落库
+- [ ] 等一轮 scheduler → 查 `llm_user_profile` / `llm_group_profile` 落库（已见首轮日志，待持续观察）
 - [ ] 群聊回复注入「群记忆 + 发言者个人记忆」的效果
 - [ ] 会话消息超 `LLM_COMPRESS_THRESHOLD` 后 `llm_session.summary` 被写入
+
+### 2. WebUI 后续（Phase 3 续）
+
+- [ ] 更多页面沿用「摘要卡 + 浮窗」的编辑范式（如 LLM 页的服务商/人设表单）
+- [ ] 状态页「可编辑布局 / 拖拽磁贴」（参考 SnowLuma 的 grid-stack，视需要再说）
 
 ## 想法池（未定，先记着）
 

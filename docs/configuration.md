@@ -164,10 +164,16 @@ Copy-Item .env.example .config\main\.env
 
 ## 3. WebUI 上改配置
 
-- **系统配置页**：运维参数（驱动 / 守卫 / 数据库 / 渲染 / LLM 兜底），保存后写回 `.config/main/.env`
-- **设置页**：服务与日志参数（`HOST` / `PORT` / `WEBUI_ENABLE` / `WEBUI_PREFIX` / `LOG_*`），
-  外加改 WebUI 访问令牌（**即时生效**）、查看 / 清理日志、版本信息
+- **系统配置页**：运维参数（驱动 / 守卫 / 数据库 / 渲染 / LLM 兜底等），**点分组摘要卡 → 弹窗编辑**，保存后写回 `.config/main/.env`
+- **日志页**：日志参数（`LOG_LEVEL` / `LOG_FILE_ENABLE` / `LOG_FILE_LEVEL` / `LOG_DIR` / `LOG_KEEP_DAYS`）
+  + 实时日志滚动 + 历史日志查看 / 删除 / 清理
+- **设置页**：服务与后台参数（`HOST` / `PORT` / `WEBUI_ENABLE` / `WEBUI_PREFIX`）、
+  改 WebUI 访问令牌（**即时生效**）、版本信息与版本控制
 - **插件管理页**：每个插件的配置项表单（保存 / 恢复默认）+ 一键热重载
+
+> 💡 **列表类配置项**（`SUPERUSERS` / `BOT_ACTIVE_GROUPS` / `COMMAND_START` / `ONEBOT_WS_URLS` 等 `list` 类型）
+> 用「标签」编辑：填一个值点「添加」（或回车），已添加项显示为标签、点 `×` 删除；
+> 群号输入框带候选下拉（可选已有群，也可手填）；选项较多的下拉带筛选输入框。
 
 写回 `.config/main/.env` 时会**按行替换、保留注释与顺序**，并先备份同目录 `.env.bak`；
 新值与现有值完全等价时**完全不写盘**（连备份都不产生）。

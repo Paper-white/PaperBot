@@ -139,7 +139,8 @@ ls -t logs/*.log | head -1
   返回的 HTML 变成 `window./api = "/api";` → 内联脚本 SyntaxError → 前缀为空 → 所有接口 404
 - ⚠️ **没有 `GET /api/llm/providers/{name}`**（单条只有 PUT/DELETE/test）：请求它返回 **405 而非 404**，
   写测试时别拿 404 当「不存在」的判据
-- ℹ️ 本机环境**没有 psutil**，状态页只报进程内信息（PID / 线程 / Python 版本），不报 CPU / 内存
+- ℹ️ 状态页的**主机资源**（CPU / 内存 / 本进程）依赖 **psutil**（已在依赖里）；未安装时该卡片优雅降级为提示文案。
+  `psutil.cpu_percent(None)` 首次调用恒返回 0，模块导入时预热了一次采样基线；非阻塞、统计的是「距上次调用」的使用率
 
 ### 数据库
 

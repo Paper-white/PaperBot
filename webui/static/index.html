@@ -17,10 +17,6 @@
         </div>
       </div>
       <nav id="nav" class="nav"></nav>
-      <div class="side-foot">
-        <span class="dot" id="conn-dot"></span>
-        <span id="conn-text">连接检测中…</span>
-      </div>
     </aside>
 
     <main class="main">
@@ -35,6 +31,16 @@
       <div id="toast" class="toast"></div>
       <section id="content" class="content"><div class="loading">加载中…</div></section>
     </main>
+  </div>
+
+  <div class="modal-overlay" id="modal-overlay" style="display:none">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title" id="modal-title"></div>
+        <button class="modal-close" id="modal-close" type="button">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
   </div>
 
   <script>

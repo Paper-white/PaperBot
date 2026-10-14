@@ -54,6 +54,7 @@
 | `src/core/logger.py` | 统一日志出口（`PrefixedLogger` 自动加 `[插件名] ` 前缀） |
 | `src/core/logging.py` | 日志文件输出（每次运行一个文件 + 查看 / 清理） |
 | `src/core/connlog.py` | 连接日志降噪（协议端重连报错：可读化 + 降级 + 节流） |
+| `src/core/textutil.py` | 共享小工具（`human_size` / `fmt_dt` / `now_text` / `human_duration`，各模块唯一来源） |
 | `src/core/chatlog.py` | **聊天记录原始流水层**（全局钩子写 `chat_message` + 查询 API） |
 | `src/core/llm.py` | 统一 LLM 服务（服务商 / 人设 / 会话 / 长期记忆 / 群记忆 / 压缩 / 流式） |
 | `src/core/scheduler.py` | 后台定时任务（记忆增量总结 + 上下文压缩） |
@@ -114,10 +115,12 @@
 ## 6. WebUI 管理后台
 
 - 后端：内嵌 **FastAPI**（复用 NoneBot 的 fastapi driver app），挂载在 `/api`；页面与静态资源由 `webui/api.py` 提供
-- 前端：**零构建单页**（`webui/static/index.html` + `assets/app.js` + `assets/style.css`），hash 路由，八个菜单：
-  **状态 / 系统配置 / 黑白名单 / 插件管理 / LLM 与记忆 / 数据库管理 / 命令管理 / 设置**
+- 前端：**零构建单页**（`webui/static/index.html` + `assets/app.js` + `assets/style.css`），hash 路由，九个菜单：
+  **状态 / 系统配置 / 黑白名单 / 插件管理 / LLM 与记忆 / 数据库管理 / 命令管理 / 日志 / 设置**
 - API 前缀通过服务端替换 `%WEBUI_PREFIX%` 占位符注入前端（页面用 `window.__WEBUI_PREFIX__` 读取）
-- 除 `GET /` 外，8 个页面名也各自注册成 `GET /<name>`（直接敲 `/status`、`/llm` 也能用）
+- 除 `GET /` 外，9 个页面名也各自注册成 `GET /<name>`（直接敲 `/status`、`/llm`、`/logs` 也能用）
+- 交互组件（全站共用）：通用浮窗 `openModal/closeModal`、chips 列表输入、可搜索长下拉、
+  群号 `datalist`、`mutate()` 写操作助手、页面级定时器 `addPageTimer/clearPageTimers`
 - 接口清单见 [`api.md`](api.md)
 
 ## 7. 数据表
@@ -170,7 +173,7 @@ Markdown（python-markdown + pymdownx + Pygments）
 | 框架 | **NoneBot2 v2** | 明确**不基于 Pallas-Bot** 开发 |
 | 协议适配 | `nonebot-adapter-onebot`（OneBot v11） | 正向 WS 驱动**必须带 `~websockets`** |
 | WebUI 后端 | 内嵌 FastAPI（复用 NoneBot 的 driver app） | 挂载 `/api` |
-| WebUI 前端 | 零构建单页（8 页） | 不引入打包工具 |
+| WebUI 前端 | 零构建单页（9 页） | 不引入打包工具 |
 | 数据库 | SQLite（SQLAlchemy 2.0 async + aiosqlite） | 所有插件共享 |
 | 配置位置 | **`.config/`**（已 gitignore）：`main/.env` + `<插件名>/config.json` | 见 [`configuration.md`](configuration.md) |
 | 插件系统 | 复用 NoneBot2 加载 + 自研门控层 | 一插件一文件夹 |

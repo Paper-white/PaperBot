@@ -20,6 +20,7 @@
     { id: 'llm', label: 'LLM 与记忆', icon: '🤖' },
     { id: 'database', label: '数据库管理', icon: '🗄️' },
     { id: 'commands', label: '命令管理', icon: '⌨️' },
+    { id: 'logs', label: '日志', icon: '📜' },
     { id: 'settings', label: '设置', icon: '🛠️' },
   ];
 
@@ -51,6 +52,17 @@
       '<div class="stat"><div class="label">' + esc(label) + '</div>' +
       '<div class="value">' + esc(value) + '</div>' +
       '<div class="sub">' + esc(sub || '') + '</div></div>'
+    );
+  }
+
+  // 带进度条的指标（CPU / 内存使用率）
+  function meter(label, percent, text) {
+    var p = Math.max(0, Math.min(100, Number(percent) || 0));
+    var color = p >= 85 ? 'red' : (p >= 60 ? 'amber' : 'green');
+    return (
+      '<div class="meter"><div class="meter-head"><span>' + esc(label) + '</span>' +
+      '<span class="mono">' + esc(text || (p + '%')) + '</span></div>' +
+      '<div class="meter-bar"><div class="meter-fill ' + color + '" style="width:' + p + '%"></div></div></div>'
     );
   }
 
@@ -121,6 +133,37 @@
     });
   }
 
+  // 通用事件绑定助手：`on(scope, '[data-x]', 'click', fn)`（等价 querySelectorAll+forEach）
+  function on(scope, selector, event, fn) {
+    scope.querySelectorAll(selector).forEach(function (el) {
+      el.addEventListener(event, function (ev) {
+        fn(el, ev);
+      });
+    });
+  }
+
+  // 通用写操作助手：PUT/POST/DELETE + toast + 成功后回调（默认 render 刷新整页）
+  // opts: { ok: 成功提示, after: 成功后的动作(默认 render), err: 失败提示前缀, disabled: 是否临时禁用按钮 }
+  function mutate(path, method, body, opts) {
+    opts = opts || {};
+    var btn = opts.btn || null;
+    if (btn) btn.disabled = true;
+    return send(path, method, body)
+      .then(function (res) {
+        var msg = typeof opts.ok === 'function' ? opts.ok(res) : (opts.ok || (res && res.message) || '已保存');
+        toast(msg, 'ok');
+        if (opts.after) opts.after(res);
+        else render();
+      })
+      .catch(function (err) {
+        toast((opts.err || '操作失败') + '：' + err.message, 'err');
+        if (opts.after) opts.after(err, true);
+      })
+      .then(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
   function errorBox(err) {
     var hint =
       err.status === 401
@@ -164,41 +207,108 @@
         ['私聊', guard.enabled ? badge('一律拦截', 'grey') : badge('不拦截', 'grey')],
       ]);
 
-      return (
+      var enabled = d.counts.plugins_enabled === undefined ? d.counts.plugins : d.counts.plugins_enabled;
+      var startedAt = Date.parse((d.server.started_at || '').replace(' ', 'T'));
+      var tiles =
         '<div class="grid">' +
-        stat('运行时长', d.server.uptime_text, '启动于 ' + d.server.started_at) +
-        stat('协议端', d.connection.online ? '已连接' : '未连接', bots.map(function (b) { return b.self_id; }).join('、') || '暂无 Bot') +
-        stat('插件 / 命令', d.counts.plugins + ' / ' + d.counts.commands, '已注册插件与命令数') +
-        stat('群 / 规则 / 授权', d.counts.groups + ' / ' + d.counts.rules + ' / ' + d.counts.grants, '数据库中出现过的群') +
-        stat('数据库大小', d.storage.size_text, d.storage.exists ? '文件就绪' : '文件尚未创建') +
-        stat('Python / 线程', d.process.python + ' / ' + d.process.threads, d.process.platform + ' · PID ' + d.process.pid) +
-        '</div>' +
+        stat('服务状态', d.connection.online ? '已连接' : '未连接', d.connection.online ? '协议端在线' : '协议端离线') +
+        '<div class="stat" id="tile-uptime"><div class="label">运行时长</div>' +
+          '<div class="value" id="uptime-value">' + esc(d.server.uptime_text) + '</div>' +
+          '<div class="sub">启动于 ' + esc(d.server.started_at) + '</div></div>' +
+        stat('插件', enabled + ' / ' + d.counts.plugins, '已启用 / 总数量') +
+        stat('数据库大小', d.storage.size_text, 'SQLite 单文件') +
+        '</div>';
+
+      return (
+        '<div data-started="' + (d.server.started_at_ts || '') + '">' +
+        tiles +
         '<div class="two-col">' +
+        '<div>' +
+        card('主机资源', '<div id="host-body">' + hostBodyHtml(d.host || {}) + '</div>', 'CPU / 内存 / 本进程 (psutil)，每 5 秒自动刷新') +
+        '</div>' +
+        '<div>' +
         card('协议端连接', botTable, 'OneBot v11 正向 WebSocket') +
         card('消息输出守卫', guardBody, '开发期防误发的安全网') +
         '</div>' +
-        '<div class="two-col">' +
+        '</div>' +
         card(
-          'WebUI',
+          '运行环境',
           kv([
-            ['监听地址', '<span class="mono">' + esc(d.webui.host) + ':' + esc(d.webui.port) + '</span>'],
-            ['API 前缀', '<span class="mono">' + esc(d.webui.prefix) + '</span>'],
-            ['鉴权', d.webui.token_required ? badge('需 Bearer Token', 'green') : badge('未设置令牌', 'amber')],
+            ['主机时间', '<span id="server-now">' + esc(d.server.now) + '</span>'],
+            ['Python / 线程', esc(d.process.python) + ' / ' + d.process.threads],
+            ['平台 / PID', esc(d.process.platform) + ' · PID ' + d.process.pid],
+            ['WebUI', '<span class="mono">' + esc(d.webui.host) + ':' + esc(d.webui.port) +
+              '</span> · ' + (d.webui.token_required ? badge('需令牌', 'green') : badge('未设令牌', 'amber'))],
+            ['数据库', '<span class="mono">' + esc(d.storage.database) + '</span>'],
+            ['群 / 规则 / 授权', d.counts.groups + ' / ' + d.counts.rules + ' / ' + d.counts.grants],
           ]),
-          '当前页面所在的管理后台'
-        ) +
-        card(
-          '存储',
-          kv([
-            ['连接串', '<span class="mono">' + esc(d.storage.database) + '</span>'],
-            ['大小', esc(d.storage.size_text)],
-            ['服务器时间', esc(d.server.now)],
-          ]),
-          'SQLite（WAL 模式，多插件共享）'
+          '进程与存储概览'
         ) +
         '</div>'
       );
     });
+  }
+
+  // 主机资源卡片正文（供首次渲染 + 定时局部刷新共用）
+  function hostBodyHtml(h) {
+    if (!h || !h.available) return empty('未启用主机监控（需安装 psutil）');
+    var loadText = '负载 ' + h.load1 + ' / ' + h.load5 + ' / ' + h.load15;
+    return (
+      meter('CPU 使用率', h.cpu_percent, h.cpu_percent + '%') +
+      '<div class="hint" style="margin:2px 0 12px">' + h.cpu_count + ' 核 · ' + esc(loadText) + '</div>' +
+      meter('内存使用', h.mem_percent, h.mem_percent + '%') +
+      '<div class="hint" style="margin:2px 0 12px">共 ' + esc(h.mem_total_text) +
+      ' · 已用 ' + esc(h.mem_used_text) + ' · 空闲 ' + esc(h.mem_free_text) + '</div>' +
+      '<div class="kv">' +
+      '<div class="k">本进程占用</div><div class="mono">' + esc(h.proc_rss_text) + '</div>' +
+      '<div class="k">本进程线程</div><div class="mono">' + esc(h.proc_threads) + '</div>' +
+      '</div>'
+    );
+  }
+
+  // 状态页自动刷新：运行时长本地每秒自增 + 主机指标每 5 秒轮询（离开页面自动停）
+  function afterStatus(root) {
+    var uptimeEl = root.querySelector('#uptime-value');
+    var marker = root.querySelector('[data-started]');
+    var startedAt = marker && marker.dataset.started ? Number(marker.dataset.started) : NaN;
+
+    if (!isNaN(startedAt) && uptimeEl) {
+      var tick = function () {
+        var sec = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+        uptimeEl.textContent = fmtDuration(sec);
+      };
+      addPageTimer(setInterval(tick, 1000));
+      tick();
+    }
+
+    addPageTimer(
+      setInterval(function () {
+        if (!document.getElementById('host-body')) return;
+        api('/status')
+          .then(function (d) {
+            var box = document.getElementById('host-body');
+            if (box) box.innerHTML = hostBodyHtml(d.host || {});
+            var now = document.getElementById('server-now');
+            if (now) now.textContent = d.server.now;
+          })
+          .catch(function () { /* 静默失败，下次再试 */ });
+      }, 5000)
+    );
+  }
+
+  // 秒数 → 「1 天 2 小时 3 分 4 秒」（与后端 human_duration 口径一致）
+  function fmtDuration(seconds) {
+    seconds = Math.max(0, Math.floor(seconds));
+    var d = Math.floor(seconds / 86400);
+    var h = Math.floor((seconds % 86400) / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+    var parts = [];
+    if (d) parts.push(d + ' 天');
+    if (h || d) parts.push(h + ' 小时');
+    if (m || h || d) parts.push(m + ' 分');
+    parts.push(s + ' 秒');
+    return parts.join(' ');
   }
 
   /* -------------------------------------------------------------- 系统配置 */
@@ -206,6 +316,28 @@
      opts.noMissing    —— 不显示「未在 .env 中显式设置」提示
      opts.missingHint  —— 未配置时的提示文案
      opts.configuredHint —— 已配置时的提示文案 */
+  // 选项数超过该值时，给下拉加一个过滤输入框
+  var SELECT_SEARCH_THRESHOLD = 8;
+
+  // 一个列表项（标签）：内容 + 删除按钮
+  function chipHtml(value) {
+    return (
+      '<span class="chip" data-chip-value="' + esc(value) + '">' +
+      '<span class="chip-text">' + esc(value) + '</span>' +
+      '<button type="button" class="chip-x" data-chip-del title="移除">×</button>' +
+      '</span>'
+    );
+  }
+
+  // 收集某个 chips 容器里的值 → 数组
+  function collectChips(container) {
+    var out = [];
+    container.querySelectorAll('.chip').forEach(function (c) {
+      out.push(c.dataset.chipValue);
+    });
+    return out;
+  }
+
   function fieldInput(field, opts) {
     opts = opts || {};
     var key = esc(field.key);
@@ -224,13 +356,27 @@
         '<option value="true"' + (field.value === true ? ' selected' : '') + '>true（开启）</option>' +
         '<option value="false"' + (field.value === false ? ' selected' : '') + '>false（关闭）</option>' +
         '</select>';
+    } else if (field.type === 'list') {
+      // 列表型：标签（chips）编辑——输入后点「添加」/回车加入，每项可删
+      var listVal = Array.isArray(field.value) ? field.value : (field.value ? [field.value] : []);
+      control =
+        '<input type="hidden" ' + common + 'value="' + esc(JSON.stringify(listVal)) + '">' +
+        '<div class="chips" data-chips="' + key + '">' +
+        listVal
+          .map(function (v) {
+            return chipHtml(v);
+          })
+          .join('') +
+        '<input class="input chip-input" data-chip-input="' + key + '" placeholder="输入后回车 / 点添加">' +
+        '<button type="button" class="btn small ghost" data-chip-add="' + key + '">添加</button>' +
+        '</div>';
     } else if (field.choices && field.choices.length) {
       var current = field.value === null || field.value === undefined ? '' : String(field.value);
-      var list = field.choices.slice();
-      if (current && list.indexOf(current) < 0) list.unshift(current);
-      control =
+      var clist = field.choices.slice();
+      if (current && clist.indexOf(current) < 0) clist.unshift(current);
+      var select =
         '<select class="input wide" ' + common + '>' +
-        list
+        clist
           .map(function (v) {
             return (
               '<option value="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>' + esc(v) + '</option>'
@@ -238,6 +384,10 @@
           })
           .join('') +
         '</select>';
+      control =
+        clist.length > SELECT_SEARCH_THRESHOLD
+          ? '<input class="input wide" data-select-filter="' + key + '" placeholder="输入以筛选…">' + select
+          : select;
     } else if (field.type === 'text') {
       var text =
         field.value === null || field.value === undefined ? '' : String(field.value);
@@ -250,11 +400,7 @@
         common + 'value="' + esc(num) + '">';
     } else {
       var value =
-        field.value === null || field.value === undefined
-          ? ''
-          : field.type === 'list'
-          ? JSON.stringify(field.value)
-          : String(field.value);
+        field.value === null || field.value === undefined ? '' : String(field.value);
       control = '<input class="input wide" type="text" ' + common + 'value="' + esc(value) + '">';
     }
 
@@ -279,44 +425,88 @@
     );
   }
 
+  // 配置分组「摘要卡」：只显示标题 / 说明 / 字段数，点击弹浮窗编辑
+  // （渲染时自动登记到 _configItems，任何页面都能点击弹浮窗）
   function configBlock(item, isAdapter) {
+    if (!_configItems[item.id || item.name]) {
+      _configItems[item.id || item.name] = { item: item, isAdapter: !!isAdapter };
+    }
     var disabled = item.available === false;
     var note = isAdapter
       ? (disabled ? badge('暂未支持', 'amber') + ' ' : badge('可用', 'green') + ' ') + esc(item.note || '')
       : esc(item.note || '');
+    var keys = item.fields
+      .map(function (f) {
+        return '<span class="mono dim">' + esc(f.key) + '</span>';
+      })
+      .slice(0, 6)
+      .join(' ');
     return (
-      '<div class="card" data-config-block>' +
+      '<div class="card config-card config-mini" data-config-card="' + esc(item.id || item.name) + '">' +
       '<div class="card-head"><div>' +
-      '<div class="card-title">' + esc(item.name) + '</div>' +
+      '<div class="card-title">' + esc(item.name) +
+      (isAdapter ? ' ' + (disabled ? badge('暂未支持', 'amber') : badge('可用', 'green')) : '') +
+      '</div>' +
       (note ? '<div class="card-note">' + note + '</div>' : '') +
-      '</div><button class="btn small" data-config-save>保存本节</button></div>' +
-      '<div class="form-grid">' + item.fields.map(fieldInput).join('') + '</div>' +
+      '</div>' +
+      '<div class="config-mini-actions">' + badge(item.fields.length + ' 项', 'grey') +
+      ' <span class="hint">点击编辑</span></div>' +
+      '</div>' +
+      '<div class="config-mini-keys">' + keys + (item.fields.length > 6 ? ' …' : '') + '</div>' +
       '</div>'
     );
   }
 
+  // 打开某个配置分组的编辑浮窗
+  function openConfigModal(item, isAdapter) {
+    var note = isAdapter
+      ? (item.available === false ? badge('暂未支持', 'amber') + ' ' : badge('可用', 'green') + ' ') + esc(item.note || '')
+      : esc(item.note || '');
+    var body =
+      (note ? '<div class="card-note" style="margin-bottom:12px">' + note + '</div>' : '') +
+      '<div class="form-grid" data-config-block data-config-id="' + esc(item.id || item.name) + '">' +
+      item.fields.map(function (f) { return fieldInput(f, { noMissing: true }); }).join('') +
+      '</div>' +
+      '<div class="form-row spaced"><button class="btn" data-config-save>保存本节</button></div>' +
+      '<div class="hint spaced">写入 <span class="mono">.config/main/.env</span>（自动备份 .env.bak），<b>需重启 Bot 生效</b>；敏感字段留空即不修改。</div>';
+    var container = openModal(esc(item.name), body);
+    bindChips(container);
+    bindConfigSaves(container);
+    bindSelectFilters(container);
+  }
+
   function pageConfig() {
     return api('/config').then(function (d) {
-      var adapters = d.adapters
+      // 缓存分组数据，供点击弹浮窗使用
+      _configItems = {};
+      (d.adapters || []).forEach(function (a) {
+        _configItems[a.id || a.name] = { item: a, isAdapter: true };
+      });
+      (d.sections || []).forEach(function (s) {
+        _configItems[s.id || s.name] = { item: s, isAdapter: false };
+      });
+
+      var adapterCards = (d.adapters || [])
         .map(function (a) {
           return configBlock(a, true);
         })
         .join('');
-      var sections = d.sections
+      var sectionCards = (d.sections || [])
         .map(function (s) {
           return configBlock(s, false);
         })
         .join('');
       return (
         '<div class="error-box warn">' +
-        '配置改动会写入 <span class="mono">' + esc(d.path) + '</span>（自动备份 .env.bak），' +
+        '点击任意分组卡片可打开编辑浮窗；配置写入 <span class="mono">' + esc(d.path) + '</span>（自动备份 .env.bak），' +
         '<b>需要重启 Bot 才会生效</b>。敏感字段不回显，留空即不修改。' +
         '</div>' +
-        card('协议端', adapters) +
-        sections
+        '<div class="grid config-grid">' + adapterCards + sectionCards + '</div>'
       );
     });
   }
+
+  var _configItems = {};
 
   function collectConfig(block) {
     var values = {};
@@ -366,8 +556,78 @@
     });
   }
 
+  // chips（列表字段）交互：添加 / 删除 / 回车；改动同步隐藏输入
+  function bindChips(scope) {
+    scope.querySelectorAll('[data-chips]').forEach(function (box) {
+      var key = box.dataset.chips;
+      var hidden = scope.querySelector('input[type=hidden][data-key="' + key + '"]');
+      var input = box.querySelector('[data-chip-input="' + key + '"]');
+      var sync = function () {
+        if (hidden) hidden.value = JSON.stringify(collectChips(box));
+      };
+      var add = function () {
+        var v = (input.value || '').trim();
+        if (!v) return;
+        var dup = collectChips(box).indexOf(v) >= 0;
+        if (dup) { toast('已在列表中', 'err'); return; }
+        input.insertAdjacentHTML('beforebegin', chipHtml(v));
+        input.value = '';
+        sync();
+      };
+      var addBtn = box.querySelector('[data-chip-add="' + key + '"]');
+      if (addBtn) addBtn.addEventListener('click', add);
+      if (input) {
+        input.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') { ev.preventDefault(); add(); }
+        });
+      }
+    });
+    // 删除（事件委托，兼容后加的 chip）
+    scope.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (t && t.dataset && t.dataset.chipDel !== undefined) {
+        var box = t.closest('[data-chips]');
+        t.closest('.chip').remove();
+        var key = box.dataset.chips;
+        var hidden = scope.querySelector('input[type=hidden][data-key="' + key + '"]');
+        if (hidden) hidden.value = JSON.stringify(collectChips(box));
+      }
+    });
+  }
+
+  // 长下拉的过滤输入：输入关键字，隐藏不匹配的 <option>
+  // 支持两种写法：`[data-select-filter="<key>"]`（配 select[data-key]）
+  //             `[data-filter-for="<selectId>"]`（配 select#id）
+  function bindSelectFilter(scope, box, select) {
+    if (!select || box.dataset.bound) return;
+    box.dataset.bound = '1';
+    box.addEventListener('input', function () {
+      var kw = (box.value || '').trim().toLowerCase();
+      var first = null;
+      Array.prototype.forEach.call(select.options, function (opt) {
+        var hit = kw === '' || String(opt.value).toLowerCase().indexOf(kw) >= 0;
+        opt.hidden = !hit;
+        if (hit && !first) first = opt;
+      });
+      if (first) select.value = first.value;
+    });
+  }
+
+  function bindSelectFilters(scope) {
+    scope.querySelectorAll('[data-select-filter]').forEach(function (box) {
+      bindSelectFilter(scope, box, scope.querySelector('select[data-key="' + box.dataset.selectFilter + '"]'));
+    });
+  }
+
   function afterConfig(root) {
-    bindConfigSaves(root);
+    // 点击分组摘要卡 → 弹浮窗编辑
+    on(root, '[data-config-card]', 'click', function (card) {
+      var entry = _configItems[card.dataset.configCard];
+      if (!entry) return;
+      openConfigModal(entry.item, entry.isAdapter);
+    });
+    bindChips(root);
+    bindSelectFilters(root);
   }
 
   /* -------------------------------------------------------------- 黑白名单 */
@@ -399,10 +659,22 @@
     return '<div class="table-wrap"><table><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>';
   }
 
+  // 群号候选 <datalist>（输入框 + 建议：可选已有群，也可手填）
+  function groupDatalist(groups, id) {
+    var opts = (groups || [])
+      .map(function (g) {
+        var label = (g.group_name ? g.group_name + ' ' : '') + g.group_id;
+        return '<option value="' + esc(g.group_id) + '">' + esc(label) + '</option>';
+      })
+      .join('');
+    return '<datalist id="' + esc(id) + '">' + opts + '</datalist>';
+  }
+
   function pagePermissions() {
     return Promise.all([api('/permissions'), api('/groups')]).then(function (res) {
       var d = res[0];
       var groups = res[1];
+      var groupListOptions = groupDatalist(groups.items, 'dl-groups-admin');
 
       var groupCards = groups.items.length
         ? groups.items
@@ -456,7 +728,8 @@
           grantRows(d.group_admins, 'group') +
             '<div class="form-row spaced">' +
             '<div class="field"><label>QQ 号</label><input class="input short" data-admin-uid placeholder="QQ"></div>' +
-            '<div class="field"><label>群号</label><input class="input short" data-admin-gid placeholder="群号"></div>' +
+            '<div class="field"><label>群号</label><input class="input short" list="dl-groups-admin" data-admin-gid placeholder="选择或输入群号"></div>' +
+            groupListOptions +
             '<button class="btn" data-admin-add>授权管理员</button>' +
             '</div>',
           '仅在该群生效'
@@ -623,6 +896,127 @@
     );
   }
 
+  var _pluginDetails = {};
+  var _pluginGroups = [];
+
+  // 渲染某个插件的「详情浮窗」正文（门控规则 + 注册命令 + 配置项 + 写入规则表单）
+  function pluginDetailBody(p) {
+    var locked = p.protected;
+    var groupOptions = _pluginGroups
+      .map(function (g) {
+        return '<option value="' + esc(g.group_id) + '">' + esc(g.group_name || g.group_id) + '</option>';
+      })
+      .join('');
+
+    var rules = p.rules.length
+      ? '<div class="table-wrap"><table><thead><tr>' +
+        '<th>作用域</th><th>状态</th><th>修改者</th><th>时间</th><th>操作</th>' +
+        '</tr></thead><tbody>' +
+        p.rules.map(function (r) { return ruleRow(p.name, r, locked); }).join('') +
+        '</tbody></table></div>'
+      : empty('暂无显式规则（按默认值运行）');
+
+    var commands = p.commands.length
+      ? '<div class="table-wrap"><table><thead><tr><th>命令</th><th>说明</th></tr></thead><tbody>' +
+        p.commands
+          .map(function (c) {
+            var aliases = c.aliases && c.aliases.length ? '（别名 ' + c.aliases.join('、') + '）' : '';
+            return (
+              '<tr><td class="mono">' + esc(c.commands.join(' / ')) + esc(aliases) + '</td>' +
+              '<td>' + esc(c.description || '-') + '</td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table></div>'
+      : empty('该插件未注册命令');
+
+    var configFields = p.config && p.config.fields ? p.config.fields : [];
+    var configBlock = !configFields.length
+      ? ''
+      : '<div data-plugin-config-block="' + esc(p.name) + '">' +
+        '<div class="form-grid">' +
+        configFields
+          .map(function (f) {
+            return fieldInput(f, { noMissing: true, missingHint: '使用默认值', configuredHint: '已自定义' });
+          })
+          .join('') +
+        '</div>' +
+        '<div class="form-row spaced">' +
+        '<button class="btn" data-plugin-config-save="' + esc(p.name) + '">保存配置</button>' +
+        '<button class="btn ghost" data-plugin-config-clear="' + esc(p.name) + '">恢复默认</button>' +
+        '</div></div>';
+
+    var addForm = locked
+      ? ''
+      : '<div class="form-row spaced">' +
+        '<div class="field"><label>作用域</label><select class="input" data-rule-scope="' + esc(p.name) + '">' +
+        '<option value="global">全局</option><option value="group">指定群</option>' +
+        '<option value="member">指定成员</option></select></div>' +
+        '<div class="field" data-rule-id-wrap="' + esc(p.name) + '" style="display:none">' +
+        '<label>群号 / QQ</label><input class="input" list="group-list-' + esc(p.name) + '" ' +
+        'data-rule-id="' + esc(p.name) + '" placeholder="群号或 QQ"></div>' +
+        '<datalist id="group-list-' + esc(p.name) + '">' + groupOptions + '</datalist>' +
+        '<div class="field"><label>状态</label><select class="input" data-rule-enabled="' + esc(p.name) + '">' +
+        '<option value="true">允许运行</option><option value="false">禁止运行</option></select></div>' +
+        '<button class="btn" data-rule-add="' + esc(p.name) + '">写入规则</button>' +
+        '</div>';
+
+    var headActions = p.reloadable
+      ? '<button class="btn small" data-plugin-reload="' + esc(p.name) + '">热重载</button>'
+      : '';
+
+    var toggle =
+      '<label class="switch" title="' + (locked ? '受保护插件不可关闭' : '全局开关') + '">' +
+      '<input type="checkbox" data-global-toggle="' + esc(p.name) + '"' +
+      (p.global_enabled ? ' checked' : '') + (locked ? ' disabled' : '') +
+      '><span class="slider"></span></label>';
+
+    return (
+      '<div class="detail-head-row">' +
+      '<div class="plugin-detail-note">' + esc(p.description || '暂无描述') +
+      (p.author ? ' · 作者 ' + esc(p.author) : '') +
+      (p.repo ? ' · <a href="' + esc(p.repo) + '" target="_blank" rel="noreferrer">仓库</a>' : '') +
+      (p.requires ? ' · 要求 <span class="mono">' + esc(p.requires) + '</span>' : '') +
+      (locked ? ' ' + badge('受保护', 'pink') : '') +
+      '</div>' +
+      '<div class="detail-toggle"><span class="detail-toggle-label">' + (p.global_enabled ? '运行中' : '已停用') + '</span>' + toggle + '</div>' +
+      '</div>' +
+      '<div class="detail-section"><div class="detail-title">门控规则</div>' + rules + addForm + '</div>' +
+      '<div class="detail-section"><div class="detail-title">注册命令</div>' + commands + '</div>' +
+      (configFields.length ? '<div class="detail-section"><div class="detail-title">插件配置项</div>' + configBlock + '</div>' : '') +
+      (headActions ? '<div class="form-row spaced">' + headActions + '</div>' : '')
+    );
+  }
+
+  // 通用浮窗：openModal(标题HTML, 正文HTML) / closeModal()（全站共用同一套骨架与遮罩）
+  function openModal(titleHtml, bodyHtml) {
+    document.getElementById('modal-title').innerHTML = titleHtml || '';
+    document.getElementById('modal-body').innerHTML = bodyHtml || '';
+    document.getElementById('modal-overlay').style.display = 'flex';
+    return document.getElementById('modal-body');
+  }
+
+  function closeModal() {
+    var overlay = document.getElementById('modal-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  // 打开插件详情浮窗
+  function openPluginModal(name) {
+    var p = _pluginDetails[name];
+    if (!p) return;
+    var body = openModal(
+      esc(p.display_name || p.name) + ' <span class="mono dim">' + esc(p.name) + '</span> ' +
+        badge('v' + p.version, 'grey') + (p.protected ? ' ' + badge('受保护', 'pink') : ''),
+      pluginDetailBody(p)
+    );
+    bindPluginActions(body);
+  }
+
+  function closePluginModal() {
+    closeModal();
+  }
+
   function pagePlugins() {
     return Promise.all([api('/plugins'), api('/groups')]).then(function (res) {
       var list = res[0];
@@ -646,128 +1040,43 @@
           });
         })
       ).then(function (details) {
-        var groupOptions = groups.items
-          .map(function (g) {
-            return '<option value="' + esc(g.group_id) + '">' + esc(g.group_name || g.group_id) + '</option>';
-          })
-          .join('');
+        _pluginGroups = groups.items;
+        details.forEach(function (p) { _pluginDetails[p.name] = p; });
 
         var cards = details
           .map(function (p) {
             var locked = p.protected;
-            var toggle =
-              '<label class="switch" title="' + (locked ? '受保护插件不可关闭' : '全局开关') + '">' +
-              '<input type="checkbox" data-global-toggle="' + esc(p.name) + '"' +
-              (p.global_enabled ? ' checked' : '') + (locked ? ' disabled' : '') +
-              '><span class="slider"></span></label>';
-            var reloadBtn = p.reloadable
-              ? '<button class="btn small" data-plugin-reload="' + esc(p.name) + '" ' +
-                'title="重新 import 插件模块（改完插件代码不用重启 Bot）">热重载</button>'
-              : '';
-            var headActions =
-              '<div class="card-head-actions">' + reloadBtn + toggle + '</div>';
-
-            var rules = p.rules.length
-              ? '<div class="table-wrap"><table><thead><tr>' +
-                '<th>作用域</th><th>状态</th><th>修改者</th><th>时间</th><th>操作</th>' +
-                '</tr></thead><tbody>' +
-                p.rules
-                  .map(function (r) {
-                    return ruleRow(p.name, r, locked);
-                  })
-                  .join('') +
-                '</tbody></table></div>'
-              : empty('暂无显式规则（按默认值运行）');
-
-            var commands = p.commands.length
-              ? '<div class="table-wrap"><table><thead><tr><th>命令</th><th>说明</th></tr></thead><tbody>' +
-                p.commands
-                  .map(function (c) {
-                    var aliases = c.aliases && c.aliases.length ? '（别名 ' + c.aliases.join('、') + '）' : '';
-                    return (
-                      '<tr><td class="mono">' + esc(c.commands.join(' / ')) + esc(aliases) + '</td>' +
-                      '<td>' + esc(c.description || '-') + '</td></tr>'
-                    );
-                  })
-                  .join('') +
-                '</tbody></table></div>'
-              : empty('该插件未注册命令');
-
-            var configFields = p.config && p.config.fields ? p.config.fields : [];
-            var configCard = !configFields.length
-              ? ''
-              : '<div class="card" data-plugin-config-block="' + esc(p.name) + '">' +
-                '<div class="card-head"><div>' +
-                '<div class="card-title">插件配置项</div>' +
-                '<div class="card-note">存放在 SQLite（表 <span class="mono">plugin_config</span>），' +
-                '改动<b>即时生效</b>，无需重启；留空即回落到默认值。</div>' +
-                '</div>' +
-                '<div class="card-head-actions">' +
-                '<button class="btn small" data-plugin-config-clear="' + esc(p.name) + '">恢复默认</button>' +
-                '<button class="btn small" data-plugin-config-save="' + esc(p.name) + '">保存配置</button>' +
-                '</div></div>' +
-                '<div class="form-grid">' +
-                configFields
-                  .map(function (f) {
-                    return fieldInput(f, {
-                      noMissing: true,
-                      missingHint: '使用默认值',
-                      configuredHint: '已自定义',
-                    });
-                  })
-                  .join('') +
-                '</div></div>';
-
-            var addForm = locked
-              ? ''
-              : '<div class="form-row spaced">' +
-                '<div class="field"><label>作用域</label><select class="input" data-rule-scope="' + esc(p.name) + '">' +
-                '<option value="global">全局</option><option value="group">指定群</option>' +
-                '<option value="member">指定成员</option></select></div>' +
-                '<div class="field" data-rule-id-wrap="' + esc(p.name) + '" style="display:none">' +
-                '<label>群号 / QQ</label><input class="input" list="group-list-' + esc(p.name) + '" ' +
-                'data-rule-id="' + esc(p.name) + '" placeholder="群号或 QQ"></div>' +
-                '<datalist id="group-list-' + esc(p.name) + '">' + groupOptions + '</datalist>' +
-                '<div class="field"><label>状态</label><select class="input" data-rule-enabled="' + esc(p.name) + '">' +
-                '<option value="true">允许运行</option><option value="false">禁止运行</option></select></div>' +
-                '<button class="btn" data-rule-add="' + esc(p.name) + '">写入规则</button>' +
-                '</div>';
-
             return (
-              '<div class="card">' +
+              '<div class="card plugin-card" data-plugin-card="' + esc(p.name) + '">' +
               '<div class="card-head"><div>' +
               '<div class="card-title">' + esc(p.display_name || p.name) +
-              ' <span class="mono dim">' + esc(p.name) + '</span> ' +
-              badge('v' + p.version, 'grey') +
+              ' <span class="mono dim">' + esc(p.name) + '</span>' +
+              '</div>' +
+              '<div class="card-note">' + esc(p.description || '暂无描述') + '</div>' +
+              '</div>' +
+              '</div>' +
+              '<div class="plugin-card-foot">' +
+              badge('v' + p.version, 'grey') + ' ' +
+              (p.global_enabled ? badge('运行中', 'green') : badge('已停用', 'red')) +
               (locked ? ' ' + badge('受保护', 'pink') : '') +
-              (!p.default_enabled ? ' ' + badge('默认关闭', 'amber') : '') +
               '</div>' +
-              '<div class="card-note">' + esc(p.description || '暂无描述') +
-              ' · 当前全局：' + (p.global_enabled ? badge('运行中', 'green') : badge('已停用', 'red')) +
-              (p.author ? ' · 作者 ' + esc(p.author) : '') +
-              (p.repo ? ' · <a href="' + esc(p.repo) + '" target="_blank" rel="noreferrer">仓库</a>' : '') +
-              (p.requires ? ' · 要求 <span class="mono">' + esc(p.requires) + '</span>' : '') +
-              '</div>' +
-              '</div>' + headActions + '</div>' +
-              '<div class="two-col">' +
-              '<div><div class="card-note" style="margin-bottom:6px"><b>门控规则</b></div>' + rules + addForm + '</div>' +
-              '<div><div class="card-note" style="margin-bottom:6px"><b>注册命令</b></div>' + commands + '</div>' +
-              '</div>' + configCard + '</div>'
+              '</div>'
             );
           })
           .join('');
 
         return (
-          '<div class="error-box warn">插件开关与规则和 QQ 命令（%on / %off）共用同一套数据，改完立即生效（无需重启）。' +
+          '<div class="error-box warn">点击插件卡片可打开详情浮窗（门控规则 / 命令 / 配置项 / 热重载）。' +
           '受保护插件（如总控插件）不允许通过 WebUI 关闭或热重载。</div>' +
-          (cards || empty('没有加载任何插件'))
+          (cards ? '<div class="plugin-grid">' + cards + '</div>' : empty('没有加载任何插件'))
         );
       });
     });
   }
 
-  function afterPlugins(root) {
-    root.querySelectorAll('[data-global-toggle]').forEach(function (box) {
+  // 绑定插件详情操作（主页面卡片 + 浮窗正文共用）
+  function bindPluginActions(scope) {
+    scope.querySelectorAll('[data-global-toggle]').forEach(function (box) {
       box.addEventListener('change', function () {
         var name = box.dataset.globalToggle;
         box.disabled = true;
@@ -778,6 +1087,7 @@
         })
           .then(function () {
             toast(name + ' 已' + (box.checked ? '启用' : '停用'), 'ok');
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -790,28 +1100,29 @@
       });
     });
 
-    root.querySelectorAll('[data-rule-scope]').forEach(function (select) {
+    scope.querySelectorAll('[data-rule-scope]').forEach(function (select) {
       select.addEventListener('change', function () {
         var name = select.dataset.ruleScope;
-        var wrap = root.querySelector('[data-rule-id-wrap="' + name + '"]');
+        var wrap = scope.querySelector('[data-rule-id-wrap="' + name + '"]');
         wrap.style.display = select.value === 'global' ? 'none' : '';
       });
     });
 
-    root.querySelectorAll('[data-rule-add]').forEach(function (btn) {
+    scope.querySelectorAll('[data-rule-add]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var name = btn.dataset.ruleAdd;
-        var scope = root.querySelector('[data-rule-scope="' + name + '"]').value;
-        var scopeId = scope === 'global' ? '' : root.querySelector('[data-rule-id="' + name + '"]').value.trim();
-        var enabled = root.querySelector('[data-rule-enabled="' + name + '"]').value === 'true';
-        if (scope !== 'global' && !scopeId) return toast('请填写群号 / QQ', 'err');
+        var scopeVal = scope.querySelector('[data-rule-scope="' + name + '"]').value;
+        var scopeId = scopeVal === 'global' ? '' : scope.querySelector('[data-rule-id="' + name + '"]').value.trim();
+        var enabled = scope.querySelector('[data-rule-enabled="' + name + '"]').value === 'true';
+        if (scopeVal !== 'global' && !scopeId) return toast('请填写群号 / QQ', 'err');
         send('/plugins/' + encodeURIComponent(name) + '/rule', 'PUT', {
-          scope_type: scope,
+          scope_type: scopeVal,
           scope_id: scopeId,
           enabled: enabled,
         })
           .then(function () {
             toast('规则已写入', 'ok');
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -820,7 +1131,7 @@
       });
     });
 
-    root.querySelectorAll('[data-rule-del]').forEach(function (btn) {
+    scope.querySelectorAll('[data-rule-del]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var name = btn.dataset.ruleDel;
         var query =
@@ -829,6 +1140,7 @@
         send('/plugins/' + encodeURIComponent(name) + '/rule' + query, 'DELETE')
           .then(function () {
             toast('规则已删除', 'ok');
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -838,10 +1150,10 @@
     });
 
     // 插件配置项：保存
-    root.querySelectorAll('[data-plugin-config-save]').forEach(function (btn) {
+    scope.querySelectorAll('[data-plugin-config-save]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var name = btn.dataset.pluginConfigSave;
-        var block = root.querySelector('[data-plugin-config-block="' + name + '"]');
+        var block = scope.querySelector('[data-plugin-config-block="' + name + '"]');
         btn.disabled = true;
         send('/plugins/' + encodeURIComponent(name) + '/config', 'PUT', {
           values: collectConfig(block),
@@ -849,6 +1161,7 @@
           .then(function (res) {
             var changed = res.changed || [];
             toast(changed.length ? '已保存：' + changed.join('、') : '没有需要修改的配置项', 'ok');
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -860,14 +1173,15 @@
       });
     });
 
-    // 插件配置项：一键恢复默认（删除该插件的全部配置记录）
-    root.querySelectorAll('[data-plugin-config-clear]').forEach(function (btn) {
+    // 插件配置项：一键恢复默认
+    scope.querySelectorAll('[data-plugin-config-clear]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var name = btn.dataset.pluginConfigClear;
         btn.disabled = true;
         send('/plugins/' + encodeURIComponent(name) + '/config', 'DELETE')
           .then(function (res) {
             toast('已恢复默认（清除 ' + res.removed + ' 项）', 'ok');
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -880,7 +1194,7 @@
     });
 
     // 热重载
-    root.querySelectorAll('[data-plugin-reload]').forEach(function (btn) {
+    scope.querySelectorAll('[data-plugin-reload]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var name = btn.dataset.pluginReload;
         btn.disabled = true;
@@ -890,6 +1204,7 @@
               '已热重载 ' + name + '（销毁 ' + res.removed_matchers + ' 个 matcher，v' + res.version + '）',
               'ok'
             );
+            closePluginModal();
             render();
           })
           .catch(function (err) {
@@ -899,6 +1214,15 @@
             btn.disabled = false;
           });
       });
+    });
+  }
+
+  function afterPlugins(root) {
+    bindPluginActions(root);
+
+    // 点击插件卡片 → 打开详情浮窗
+    on(root, '[data-plugin-card]', 'click', function (card) {
+      openPluginModal(card.dataset.pluginCard);
     });
   }
 
@@ -1027,97 +1351,132 @@
     );
   }
 
+  // 命令数据缓存：单张大表在前端做筛选/排序/搜索，无需重新请求
+  var _cmdData = { rows: [], levels: [], prefix: '' };
+
+  function commandsRowHtml(c) {
+    var levelCell = levelSelect(c, _cmdData.levels);
+    var tip = c.overridden ? '已改过（默认 ' + esc(c.default_level_label) + '）' : '默认';
+    return (
+      '<tr data-cmd-plugin="' + esc(c.plugin) + '" data-cmd-level-val="' + c.level + '">' +
+      '<td class="mono">' + esc(c.display) + '</td>' +
+      '<td class="mono hint">' + esc(c.alias_display || '-') + '</td>' +
+      '<td>' + esc(c.description || '-') + '</td>' +
+      '<td class="mono dim">' + esc(c.plugin) + '</td>' +
+      '<td>' + levelCell + '<div class="hint">' + tip + '</div></td>' +
+      '</tr>'
+    );
+  }
+
+  function renderCommandsTable(root) {
+    var plugin = (root.querySelector('#cmd-filter-plugin') || {}).value || '';
+    var level = (root.querySelector('#cmd-filter-level') || {}).value || '';
+    var kw = ((root.querySelector('#cmd-search') || {}).value || '').trim().toLowerCase();
+    var sort = (root.querySelector('#cmd-sort') || {}).value || 'plugin';
+
+    var rows = _cmdData.rows.filter(function (c) {
+      if (plugin && c.plugin !== plugin) return false;
+      if (level && String(c.level) !== level) return false;
+      if (kw) {
+        var hay = (c.display + ' ' + (c.alias_display || '') + ' ' + (c.description || '') + ' ' + c.plugin).toLowerCase();
+        if (hay.indexOf(kw) < 0) return false;
+      }
+      return true;
+    });
+    rows.sort(function (a, b) {
+      if (sort === 'level') return a.level - b.level || a.plugin.localeCompare(b.plugin);
+      if (sort === 'name') return a.display.localeCompare(b.display);
+      return a.plugin.localeCompare(b.plugin) || a.display.localeCompare(b.display);
+    });
+
+    var body = root.querySelector('#cmd-tbody');
+    if (!body) return;
+    body.innerHTML = rows.length
+      ? rows.map(commandsRowHtml).join('')
+      : '<tr><td colspan="5" class="hint">没有符合条件的命令</td></tr>';
+    var cnt = root.querySelector('#cmd-count');
+    if (cnt) cnt.textContent = '显示 ' + rows.length + ' / ' + _cmdData.rows.length + ' 条';
+    bindCommandRows(root);
+  }
+
+  function bindCommandRows(root) {
+    on(root.querySelector('#cmd-tbody') || root, '[data-cmd-level]', 'change', function (sel) {
+      mutate(
+        '/commands/' + encodeURIComponent(sel.dataset.plugin) + '/' + encodeURIComponent(sel.dataset.command),
+        'PUT',
+        { level: parseInt(sel.value, 10) },
+        { ok: '已更新并即时生效', err: '更新失败', btn: sel }
+      );
+    });
+    on(root.querySelector('#cmd-tbody') || root, '[data-cmd-reset]', 'click', function (btn) {
+      mutate(
+        '/commands/' + encodeURIComponent(btn.dataset.plugin) + '/' + encodeURIComponent(btn.dataset.command),
+        'DELETE',
+        undefined,
+        { ok: '已恢复默认', err: '操作失败', btn: btn }
+      );
+    });
+  }
+
   function pageCommands() {
     return api('/commands').then(function (d) {
       var levels = d.levels || [];
-      var cards = d.items.length
-        ? d.items
-            .map(function (p) {
-              var rows = p.commands.length
-                ? p.commands
-                    .map(function (c) {
-                      c.plugin = p.plugin;
-                      var levelCell = levelSelect(c, levels);
-                      var tip = c.overridden
-                        ? '已改过（默认 ' + esc(c.default_level_label) + '）'
-                        : '默认';
-                      return (
-                        '<tr><td class="mono">' + esc(c.display) + '</td>' +
-                        '<td class="mono hint">' + esc(c.alias_display || '-') + '</td>' +
-                        '<td>' + esc(c.description || '-') + '</td>' +
-                        '<td>' + levelCell + '<div class="hint">' + tip + '</div></td></tr>'
-                      );
-                    })
-                    .join('')
-                : '<tr><td colspan="4" class="hint">该插件没有注册命令</td></tr>';
-              return (
-                '<div class="card"><div class="card-head"><div>' +
-                '<div class="card-title">' + esc(p.display_name || p.plugin) +
-                ' <span class="mono dim">' + esc(p.plugin) + '</span> ' + badge('v' + p.version, 'grey') +
-                (p.protected ? ' ' + badge('受保护', 'pink') : '') + '</div>' +
-                '<div class="card-note">' + esc(p.description || '暂无描述') + ' · ' + p.command_count + ' 条命令</div>' +
-                '</div></div>' +
-                '<div class="table-wrap"><table><thead><tr>' +
-                '<th>命令</th><th>别名</th><th>功能介绍</th><th>所需权限</th>' +
-                '</tr></thead><tbody>' + rows + '</tbody></table></div></div>'
-              );
-            })
-            .join('')
-        : empty('没有已注册的命令');
+      _cmdData.levels = levels;
+      _cmdData.prefix = d.prefix || '';
+      _cmdData.rows = [];
+      (d.items || []).forEach(function (p) {
+        (p.commands || []).forEach(function (c) {
+          c.plugin = p.plugin;
+          _cmdData.rows.push(c);
+        });
+      });
+
+      var pluginOpts = ['<option value="">全部插件</option>']
+        .concat(
+          (d.items || []).map(function (p) {
+            return '<option value="' + esc(p.plugin) + '">' + esc(p.display_name || p.plugin) + '</option>';
+          })
+        )
+        .join('');
+      var levelOpts = ['<option value="">全部权限</option>']
+        .concat(levels.map(function (lv) {
+          return '<option value="' + lv.value + '">' + esc(lv.label) + '</option>';
+        }))
+        .join('');
 
       return (
-        '<div class="error-box warn">群里发命令时要带前缀 <span class="mono">' + esc(d.prefix || '（未设置）') +
-        '</span>，例如 <span class="mono">' + esc(d.prefix) + 'help</span>。共 ' +
-        d.plugin_count + ' 个插件 / ' + d.command_count + ' 条命令。</div>' +
-        '<div class="hint spaced">命令的<b>默认权限</b>由插件代码声明；这里的<b>实际权限</b>由框架维护，' +
-        '改动写入数据库并<b>立即生效</b>。当前有 ' + (d.override_count || 0) + ' 条被改过。' +
-        '受保护插件（总控台）与「插件自管权限」的命令不可改。</div>' + cards
+        '<div class="error-box warn">群里发命令要带前缀 <span class="mono">' + esc(d.prefix || '（未设置）') +
+        '</span>（如 <span class="mono">' + esc(d.prefix) + 'help</span>）。共 ' + d.plugin_count +
+        ' 个插件 / ' + d.command_count + ' 条命令，当前 ' + (d.override_count || 0) +
+        ' 条被改过。实际权限由框架维护，<b>改完即时生效</b>；受保护 / 插件自管的命令不可改。</div>' +
+        card(
+          '命令总览',
+          '<div class="cmd-toolbar">' +
+            '<input class="input" id="cmd-search" placeholder="搜索命令 / 别名 / 介绍…">' +
+            '<select class="input" id="cmd-filter-plugin">' + pluginOpts + '</select>' +
+            '<select class="input" id="cmd-filter-level">' + levelOpts + '</select>' +
+            '<select class="input" id="cmd-sort">' +
+              '<option value="plugin">按来源插件</option>' +
+              '<option value="level">按所需权限</option>' +
+              '<option value="name">按命令名</option>' +
+            '</select>' +
+            '<span class="hint" id="cmd-count"></span>' +
+          '</div>' +
+          '<div class="table-wrap"><table><thead><tr>' +
+          '<th>命令</th><th>别名</th><th>功能介绍</th><th>来源插件</th><th>所需权限</th>' +
+          '</tr></thead><tbody id="cmd-tbody"></tbody></table></div>',
+          '点筛选/排序即时在本地过滤，不重新请求'
+        )
       );
     });
   }
 
   function afterCommands(root) {
-    root.querySelectorAll('[data-cmd-level]').forEach(function (sel) {
-      sel.addEventListener('change', function () {
-        var level = parseInt(sel.value, 10);
-        sel.disabled = true;
-        send(
-          '/commands/' +
-            encodeURIComponent(sel.dataset.plugin) + '/' +
-            encodeURIComponent(sel.dataset.command),
-          'PUT',
-          { level: level }
-        )
-          .then(function (res) {
-            toast(res.message || '已更新', 'ok');
-            render();
-          })
-          .catch(function (err) {
-            toast('更新失败：' + err.message, 'err');
-            sel.disabled = false;
-            render();
-          });
-      });
-    });
-
-    root.querySelectorAll('[data-cmd-reset]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        btn.disabled = true;
-        send(
-          '/commands/' +
-            encodeURIComponent(btn.dataset.plugin) + '/' +
-            encodeURIComponent(btn.dataset.command),
-          'DELETE'
-        )
-          .then(function (res) {
-            toast(res.message || '已恢复默认', 'ok');
-            render();
-          })
-          .catch(function (err) {
-            toast('操作失败：' + err.message, 'err');
-            btn.disabled = false;
-          });
-      });
+    renderCommandsTable(root);
+    ['#cmd-search', '#cmd-filter-plugin', '#cmd-filter-level', '#cmd-sort'].forEach(function (sel) {
+      var el = root.querySelector(sel);
+      if (el) el.addEventListener('input', function () { renderCommandsTable(root); });
+      if (el) el.addEventListener('change', function () { renderCommandsTable(root); });
     });
   }
 
@@ -1234,7 +1593,6 @@
       var vc = res[1];
       var v = d.version;
       var r = d.runtime;
-      var logs = d.logs;
       var sec = d.security;
 
       var versionCard = card(
@@ -1278,44 +1636,7 @@
         '🔒 公网部署务必设置'
       );
 
-      var logRows = logs.files.length
-        ? '<div class="table-wrap"><table><thead><tr>' +
-          '<th>日志文件</th><th>大小</th><th>最后写入</th><th>操作</th>' +
-          '</tr></thead><tbody>' +
-          logs.files
-            .map(function (f) {
-              return (
-                '<tr><td class="mono">' + esc(f.name) +
-                (f.current ? ' ' + badge('当前', 'green') : '') + '</td>' +
-                '<td>' + esc(f.size_text) + '</td>' +
-                '<td class="hint">' + esc(f.modified_at) + '</td>' +
-                '<td><button class="btn ghost small" data-log-view="' + esc(f.name) + '">查看</button>' +
-                (f.current
-                  ? ''
-                  : ' <button class="btn ghost small" data-log-del="' + esc(f.name) + '">删除</button>') +
-                '</td></tr>'
-              );
-            })
-            .join('') +
-          '</tbody></table></div>'
-        : empty(logs.enabled ? '还没有日志文件（重启 Bot 后生成）' : '日志文件输出已关闭（LOG_FILE_ENABLE=false）');
-
-      var logCard = card(
-        '日志文件',
-        '<div class="form-row">' +
-          '<div class="field"><label>目录</label><div class="mono">' + esc(logs.dir) + '</div></div>' +
-          '<div class="field"><label>级别</label><div>' + badge(logs.level, 'blue') + '</div></div>' +
-          '<div class="field"><label>保留</label><div>' + badge(logs.keep_days + ' 天', 'grey') + '</div></div>' +
-          '<div class="field"><label>占用</label><div>' + esc(logs.total_text) + ' · ' +
-          logs.files.length + ' 个文件</div></div>' +
-          '<button class="btn danger" id="clear-logs">清理全部日志</button>' +
-        '</div>' +
-        '<div class="spaced">' + logRows + '</div>' +
-        '<div id="log-view"></div>',
-        logs.enabled ? '本次运行：' + esc(logs.current) : '未启用'
-      );
-
-      // 从「系统配置」迁过来的可编辑分组：服务与后台 / 日志
+      // 「服务与后台」可编辑分组（日志相关已迁到「日志」页）
       var sectionCards = (d.sections || [])
         .map(function (s) {
           return configBlock(s, false);
@@ -1325,10 +1646,11 @@
         ? '<div class="error-box warn">下面这些配置会写入 <span class="mono">' +
           esc(d.config_path || '.env') +
           '</span>（自动备份 .env.bak），<b>需要重启 Bot 才会生效</b>；' +
-          'WebUI 令牌不在这里改，见上方卡片（可即时生效）。</div>' + sectionCards
+          'WebUI 令牌不在这里改，见上方卡片（可即时生效）。日志相关配置见「日志」页。</div>' +
+          '<div class="grid config-grid">' + sectionCards + '</div>'
         : '';
 
-      return versionCard + runtimeCard + versionCardHtml(vc) + sectionBox + tokenCard + logCard;
+      return versionCard + runtimeCard + versionCardHtml(vc) + sectionBox + tokenCard;
     });
   }
 
@@ -1360,50 +1682,144 @@
           });
       });
     }
+  }
 
+  /* ---------------------------------------------------------------- 日志页 */
+  function pageLogs() {
+    return api('/settings').then(function (d) {
+      var logs = d.logs;
+      _logSections = d.log_sections || [];
+
+      // 上方：日志配置（分组摘要卡，点击弹浮窗）
+      var configCards = _logSections
+        .map(function (s) {
+          return configBlock(s, false);
+        })
+        .join('');
+
+      // 中间：实时日志（轮询）
+      var liveCard = card(
+        '实时日志',
+        '<div class="form-row">' +
+          '<div class="field"><label>文件</label><div class="mono" id="live-log-name">' +
+          esc(logs.current || '（未启用）') + '</div></div>' +
+          '<div class="field"><label>行数</label><select class="input" id="live-log-lines">' +
+          '<option value="100">100</option><option value="200" selected>200</option>' +
+          '<option value="300">300</option><option value="500">500</option></select></div>' +
+          '<label class="switch" title="开启/暂停自动刷新"><input type="checkbox" id="live-log-auto" checked><span class="slider"></span></label>' +
+          '<span class="hint">自动刷新</span>' +
+          '<button class="btn ghost small" id="live-log-refresh">手动刷新</button>' +
+        '</div>' +
+        '<div id="live-log" class="log-view spaced">（加载中…）</div>',
+        logs.enabled ? '每 2 秒自动刷新，只保留最近若干行' : '日志文件输出已关闭（LOG_FILE_ENABLE=false）'
+      );
+
+      // 下方：历史日志文件
+      var rows = logs.files.length
+        ? logs.files
+            .map(function (f) {
+              return (
+                '<tr><td class="mono">' + esc(f.name) +
+                (f.current ? ' ' + badge('当前', 'green') : '') + '</td>' +
+                '<td>' + esc(f.size_text) + '</td>' +
+                '<td class="hint">' + esc(f.modified_at) + '</td>' +
+                '<td><button class="btn ghost small" data-log-view="' + esc(f.name) + '">查看</button>' +
+                (f.current ? '' : ' <button class="btn ghost small" data-log-del="' + esc(f.name) + '">删除</button>') +
+                '</td></tr>'
+              );
+            })
+            .join('')
+        : '<tr><td colspan="4" class="hint">' +
+          (logs.enabled ? '还没有日志文件（重启 Bot 后生成）' : '日志文件输出已关闭') + '</td></tr>';
+
+      var historyCard = card(
+        '历史日志',
+        '<div class="form-row">' +
+          '<div class="field"><label>目录</label><div class="mono">' + esc(logs.dir) + '</div></div>' +
+          '<div class="field"><label>占用</label><div>' + esc(logs.total_text) + ' · ' +
+          logs.files.length + ' 个文件</div></div>' +
+          '<button class="btn danger" id="clear-logs">清理全部日志</button>' +
+        '</div>' +
+        '<div class="table-wrap spaced"><table><thead><tr>' +
+        '<th>日志文件</th><th>大小</th><th>最后写入</th><th>操作</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div id="log-view"></div>',
+        logs.enabled ? '本次运行：' + esc(logs.current) : '未启用'
+      );
+
+      return (
+        (configCards ? '<div class="grid config-grid">' + configCards + '</div>' : '') +
+        liveCard + historyCard
+      );
+    });
+  }
+
+  var _logSections = [];
+
+  function refreshLiveLog(root) {
+    var box = root.querySelector('#live-log');
+    if (!box) return;
+    var lines = (root.querySelector('#live-log-lines') || {}).value || '200';
+    api('/logs/tail?lines=' + encodeURIComponent(lines))
+      .then(function (res) {
+        box.textContent = res.content || '（空文件）';
+        box.scrollTop = box.scrollHeight;
+        var nameEl = root.querySelector('#live-log-name');
+        if (nameEl && res.name) nameEl.textContent = res.name;
+      })
+      .catch(function () { /* 静默：下次轮询再试 */ });
+  }
+
+  function afterLogs(root) {
+    bindChips(root);
+    bindSelectFilters(root);
+
+    on(root, '[data-config-card]', 'click', function (card) {
+      var entry = _configItems[card.dataset.configCard];
+      if (entry) openConfigModal(entry.item, entry.isAdapter);
+    });
+
+    // 实时日志：立即刷一次 + 定时轮询（切页时由 clearPageTimers 统一清理）
+    refreshLiveLog(root);
+    var auto = root.querySelector('#live-log-auto');
+    addPageTimer(
+      setInterval(function () {
+        if (!document.getElementById('live-log')) return;
+        if (!auto || auto.checked) refreshLiveLog(root);
+      }, 2000)
+    );
+    var refresh = root.querySelector('#live-log-refresh');
+    if (refresh) refresh.addEventListener('click', function () { refreshLiveLog(root); });
+    var linesSel = root.querySelector('#live-log-lines');
+    if (linesSel) linesSel.addEventListener('change', function () { refreshLiveLog(root); });
+
+    // 历史日志：查看 / 删除 / 清理全部
+    on(root, '[data-log-view]', 'click', function (btn) {
+      var box = root.querySelector('#log-view');
+      box.innerHTML = '<div class="loading">读取中…</div>';
+      api('/settings/logs/' + encodeURIComponent(btn.dataset.logView) + '?lines=300')
+        .then(function (res) {
+          box.innerHTML =
+            '<div class="card"><div class="card-head"><div><div class="card-title">' +
+            esc(res.name) + '</div><div class="card-note">' + esc(res.size_text) + ' · 末尾 ' +
+            res.lines + ' 行</div></div></div>' +
+            '<div class="log-view">' + esc(res.content || '（空文件）') + '</div></div>';
+        })
+        .catch(function (err) { box.innerHTML = errorBox(err); });
+    });
+    on(root, '[data-log-del]', 'click', function (btn) {
+      var name = btn.dataset.logDel;
+      if (!window.confirm('删除日志文件 ' + name + ' ？')) return;
+      mutate('/settings/logs/' + encodeURIComponent(name), 'DELETE', undefined,
+        { ok: '已删除', err: '删除失败' });
+    });
     var clearBtn = root.querySelector('#clear-logs');
     if (clearBtn) {
       clearBtn.addEventListener('click', function () {
         if (!window.confirm('确定清理全部日志吗？（当前运行的日志会被清空）')) return;
-        send('/settings/logs', 'DELETE')
-          .then(function (res) {
-            toast('已清理 ' + res.deleted + ' 个文件，释放 ' + res.freed_text, 'ok');
-            render();
-          })
-          .catch(function (err) {
-            toast(err.message || '清理失败', 'err');
-          });
+        mutate('/settings/logs', 'DELETE', undefined, { ok: '已清理全部日志', err: '清理失败' });
       });
     }
-
-    root.querySelectorAll('[data-log-view]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var box = root.querySelector('#log-view');
-        box.innerHTML = '<div class="loading">读取中…</div>';
-        api('/settings/logs/' + encodeURIComponent(btn.dataset.logView) + '?lines=200')
-          .then(function (res) {
-            box.innerHTML = '<div class="log-view">' + esc(res.content || '（空文件）') + '</div>';
-          })
-          .catch(function (err) {
-            box.innerHTML = errorBox(err);
-          });
-      });
-    });
-
-    root.querySelectorAll('[data-log-del]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var name = btn.dataset.logDel;
-        if (!window.confirm('删除日志文件 ' + name + ' ？')) return;
-        send('/settings/logs/' + encodeURIComponent(name), 'DELETE')
-          .then(function (res) {
-            toast('已删除，释放 ' + res.freed_text, 'ok');
-            render();
-          })
-          .catch(function (err) {
-            toast(err.message || '删除失败', 'err');
-          });
-      });
-    });
   }
 
   /* 版本控制按钮组：检查更新 / 更新到最新 / 切换版本 / 重启 */
@@ -1587,7 +2003,8 @@
           '<div class="field spaced"><label>模型（优先 + 备用，最多 3 个，拖动排序）</label>' +
           '<div class="hint">填好地址和 Key 后点「获取可用模型」，从下拉里选模型加入列表；排在最前的作为首选，失败自动切下一个。</div>' +
           '<div class="form-row" style="align-items:flex-end">' +
-          '<div class="field" style="flex:1;min-width:220px"><select class="input" id="llm-models-select"><option value="">（先获取模型）</option></select></div>' +
+          '<div class="field" style="flex:1;min-width:220px"><input class="input wide" id="llm-models-filter" data-filter-for="llm-models-select" placeholder="输入以筛选模型…">' +
+          '<select class="input wide" id="llm-models-select"><option value="">（先获取模型）</option></select></div>' +
           '<button class="btn ghost" data-llm-models-fetch>获取可用模型</button>' +
           '<button class="btn ghost" data-llm-models-add>加入列表</button>' +
           '</div>' +
@@ -1930,6 +2347,11 @@
         el.addEventListener('click', function () { fn(el); });
       });
     }
+
+    // 长下拉筛选（模型选择）
+    root.querySelectorAll('[data-filter-for]').forEach(function (box) {
+      bindSelectFilter(root, box, root.querySelector('#' + box.dataset.filterFor));
+    });
 
     /* ---- 服务商 ---- */
     var saveProv = root.querySelector('[data-llm-prov-save]');
@@ -2336,16 +2758,19 @@
     llm: pageLlm,
     database: pageDatabase,
     commands: pageCommands,
+    logs: pageLogs,
     settings: pageSettings,
   };
 
   var AFTER = {
+    status: afterStatus,
     config: afterConfig,
     permissions: afterPermissions,
     plugins: afterPlugins,
     llm: afterLlm,
     database: afterDatabase,
     commands: afterCommands,
+    logs: afterLogs,
     settings: afterSettings,
   };
 
@@ -2372,6 +2797,22 @@
     return MENU[0].id;
   }
 
+  // 页面级定时器登记表：切页 / 刷新时统一清理，避免后台空跑
+  var _pageTimers = [];
+
+  function addPageTimer(timer) {
+    _pageTimers.push(timer);
+    return timer;
+  }
+
+  function clearPageTimers() {
+    _pageTimers.forEach(function (t) {
+      clearInterval(t);
+      clearTimeout(t);
+    });
+    _pageTimers = [];
+  }
+
   function render() {
     var id = currentPageId();
     var page = MENU.filter(function (m) {
@@ -2382,31 +2823,18 @@
       el.classList.toggle('active', el.dataset.id === id);
     });
 
+    clearPageTimers();
+    closeModal();
+
     var content = document.getElementById('content');
     content.innerHTML = '<div class="loading">加载中…</div>';
     PAGES[id]()
       .then(function (html) {
         content.innerHTML = html;
         if (AFTER[id]) AFTER[id](content);
-        updateConn();
       })
       .catch(function (err) {
         content.innerHTML = errorBox(err);
-      });
-  }
-
-  function updateConn() {
-    var dot = document.getElementById('conn-dot');
-    var text = document.getElementById('conn-text');
-    api('/status')
-      .then(function (d) {
-        var online = d.connection.online;
-        dot.className = 'dot ' + (online ? 'on' : 'off');
-        text.textContent = online ? '协议端已连接' : '协议端未连接';
-      })
-      .catch(function () {
-        dot.className = 'dot off';
-        text.textContent = '无法访问后端';
       });
   }
 
@@ -2423,6 +2851,16 @@
     });
     document.getElementById('refresh').addEventListener('click', render);
 
+    // 浮窗关闭：× 按钮 + 点遮罩空白处（全局绑一次）
+    var overlay = document.getElementById('modal-overlay');
+    var closeBtn = document.getElementById('modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (overlay) {
+      overlay.addEventListener('click', function (ev) {
+        if (ev.target === overlay) closeModal();
+      });
+    }
+
     window.addEventListener('hashchange', render);
     if (!location.hash || location.hash === '#/') {
       // 支持直接访问 /status、/config 这类路径（与后端页面路由对应）
@@ -2433,7 +2871,6 @@
       location.hash = '#/' + (known ? known.id : MENU[0].id);
     }
     render();
-    setInterval(updateConn, 20000);
   }
 
   document.addEventListener('DOMContentLoaded', boot);

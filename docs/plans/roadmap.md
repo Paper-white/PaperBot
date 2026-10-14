@@ -15,7 +15,7 @@
 | **Phase 2** | 统一 LLM 服务（多服务商 / 人设 / 会话 / 记忆 / 流式）→ [`02-llm-service.md`](02-llm-service.md) | ✅ 已完成 |
 | **Phase 2.5** | 配置集中化（`.config/` + 插件配置改 JSON）→ [`03-config-consolidation.md`](03-config-consolidation.md) | ✅ 已完成 |
 | **Phase 2.6** | 框架版本控制（WebUI 一键拉取云端版本 + 重启）→ [`05-version-control.md`](05-version-control.md) | ✅ 已完成 |
-| **Phase 3** | WebUI 打磨（前端交互 / 更多 API / 按需补设置项） | 🔜 下一步 |
+| **Phase 3** | WebUI 打磨（第一轮已完成：自动刷新 / 浮窗 / 输入控件 / 命令大表 / 日志页；后续按需继续） | 🚧 进行中 |
 
 ## Phase 1 已完成清单（存档）
 
