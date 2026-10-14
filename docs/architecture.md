@@ -176,8 +176,8 @@ Markdown（python-markdown + pymdownx + Pygments）
 | 插件系统 | 复用 NoneBot2 加载 + 自研门控层 | 一插件一文件夹 |
 | 插件管理 | QQ 命令 + WebUI API 双通道（共用 `service`） | |
 | 框架版本协议 | `FRAMEWORK_VERSION`，插件用 `requires` 声明兼容范围 | 不满足则拒绝加载 |
-| 环境管理 | pixi（Python 3.11） | |
-| 部署 | 本地 Windows 开发 → 后续 Docker 化 | 见 [`deploy.md`](deploy.md) |
+| 环境管理 | pixi（Python 3.11，win-64 / linux-64） | |
+| 部署 | 本地 / 服务器直跑（systemd / 任务计划） | 见 [`deploy.md`](deploy.md) |
 
 > 不用 Pallas-Bot 的原因：复读 / 语料 / 牛格功能用不到；LLM 链路绑死牛格；WebUI 与功能强耦合；架构过重。
 > 可以参考其相关代码，但不基于它开发。

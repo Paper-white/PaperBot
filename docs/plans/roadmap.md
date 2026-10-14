@@ -16,14 +16,13 @@
 | **Phase 2.5** | 配置集中化（`.config/` + 插件配置改 JSON）→ [`03-config-consolidation.md`](03-config-consolidation.md) | ✅ 已完成 |
 | **Phase 2.6** | 框架版本控制（WebUI 一键拉取云端版本 + 重启）→ [`05-version-control.md`](05-version-control.md) | ✅ 已完成 |
 | **Phase 3** | WebUI 打磨（前端交互 / 更多 API / 按需补设置项） | 🔜 下一步 |
-| **Phase 4** | Docker 化部署 | ⏳ 未开始 |
 
 ## Phase 1 已完成清单（存档）
 
 - pixi 工作区 + `pyproject.toml`
 - `bot.py` 入口 + `.env.example`
 - 自研框架核心 `src/core`（Feature / 门控 / 守卫 / 权限 / 共享 DB / service / loader）
-- 总控插件 `paperbot_console` + 示例插件 `paperbot_echo`
+- 总控插件 `paperbot_console` + 在线状态测试插件 `paperbot_ping`
 - 四级权限系统（0 黑名单 / 1 普通 / 2 群管 / 3 所有者）+ 黑名单门控
 - 消息输出守卫（开发期锁死消息出口，私聊一律拦截）
 - WebUI 后端全量 API + 零构建单页前端
@@ -37,11 +36,10 @@
 
 按优先级，具体拆解见 [`04-backlog.md`](04-backlog.md)：
 
-1. **群内实测**：`%help` / `%ai` 系列 / `%off` / `%on` / `%admin add`，
-   以及 WebUI 改命令权限后验证即时生效
-2. **真实 LLM key 连通**：群内跑通 `%ai`（含流式输出与记忆触发）
-3. **WebUI 打磨**：前端交互细节、更多 API、按需补设置项
-4. **历史遗留**：统一时间显示口径（见 `04-backlog.md`）
+1. **记忆 / 压缩真机验证**：重启确认 `paperbot_ping` 加载，群里聊一阵后查
+   `chat_message` / `llm_user_profile` / `llm_group_profile` / `llm_session.summary`
+2. **WebUI 打磨**：前端交互细节、更多 API、按需补设置项
+3. **AI 工具调用（function calling）**：让 AI 自己查群聊上下文 / 用户画像（想法池）
 
 ## 维护约定
 

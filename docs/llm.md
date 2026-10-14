@@ -62,9 +62,8 @@ curl http://127.0.0.1:6188/api/llm/status
 | `LLM_MAX_TOKENS` | `0` | `0` = 不传，交给服务端默认 |
 | `LLM_DEFAULT_PRESET` | 空 | 默认人设名（未指定时用它），内置示例 `paper_white` |
 | `LLM_STREAM_ENABLE` | `false` | 流式总开关（插件显式传 `use_stream` 时以插件为准） |
-| `LLM_MEMORY_ENABLE` | `true` | 是否注入「用户印象 + 关键信息」 |
+| `LLM_MEMORY_ENABLE` | `true` | 是否注入「用户印象 + 关键信息 + 群记忆」 |
 | `LLM_CONTEXT_ROUNDS` | `10` | 上下文轮数（1 轮 = 用户 + 助手） |
-| `LLM_IMPRESSION_EVERY` | `10` | 每多出 N 条用户消息，自动提炼一次印象（`<=0` 关闭） |
 | `LLM_MAX_FACTS` | `30` | 最多往提示词里塞几条关键信息 |
 
 > ⚠️ `.env` 里的 LLM 相关键（含 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` 等）也能在 WebUI
@@ -390,7 +389,7 @@ A：看该会话用了哪个人设（WebUI「会话」卡片）——会话上�
 A：不会。会话按「作用域 + 谁 + **插件名**」隔离；如果你发现串了，检查是否漏传 `plugin`（用 `feature.llm` 会自动带）。
 
 **Q：印象一直不更新？**
-A：默认每 10 条**用户消息**才提炼一次（`LLM_IMPRESSION_EVERY`），且要求 `scope="user"` + `LLM_MEMORY_ENABLE=true`；想立刻看效果用 WebUI 手写印象或调 `refresh_profile()`。
+A：印象由后台调度器**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）从聊天流水增量提炼（要求 `LLM_SUMMARY_ENABLE=true` 且配置了可用服务商）；想立刻看效果可在 WebUI 手写印象，或调 `summarize_user()`。
 
 **Q：群里会不会知道我跟机器人私聊的内容？**
 A：不会。`scope="group"` 的会话不注入个人长期记忆。

@@ -175,12 +175,7 @@ location / {
 
 **备份建议**：`data/paperbot.db` + `.config/` 两个一起备（配置里有密钥，注意保管）。
 
-## 6. Docker（规划中）
-
-Docker 化部署属于 **Phase 4**，尚未实现。届时会提供 `Dockerfile` +
-挂载 `.config/`、`data/`、`logs/` 三个目录的方案，进度见 [`plans/roadmap.md`](plans/roadmap.md)。
-
-## 7. 排错
+## 6. 排错
 
 | 现象 | 排查方向 |
 |---|---|
