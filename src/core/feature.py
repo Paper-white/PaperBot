@@ -217,6 +217,12 @@ class Feature:
         gate = Rule(gate_rule(self.name))
         if rule is None:
             return gate
+        # ⚠️ 不要用 `Rule(rule)` 二次包装：NoneBot 2.5 会把 Rule 对象本身当成
+        # Dependent 解析（而不是展开它内部已解析好的 checkers），
+        # 规则求值时抛 `TypeAdapter[...] is not fully defined`。
+        # 这里直接取 `rule.checkers` 与门控做 AND，等价且避免嵌套。
+        if isinstance(rule, Rule):
+            return Rule(*rule.checkers, *gate.checkers)
         return Rule(rule) & gate
 
     # ------------------------------------------------------------------ #
