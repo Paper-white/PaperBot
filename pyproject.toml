@@ -7,7 +7,7 @@ dependencies = ["playwright>=1.63.0,<2", "markdown>=3.11,<4", "pygments>=2.21.0,
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["win-64"]
+platforms = ["win-64", "linux-64"]
 
 [tool.pixi.dependencies]
 python = "3.11.*"
