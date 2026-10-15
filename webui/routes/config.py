@@ -180,7 +180,6 @@ LLM_SECTIONS: list[dict[str, Any]] = [
             _field("LLM_SUMMARY_MODEL", "总结用模型", hint="留空 = 服务商首选；建议填便宜模型"),
             _field("LLM_SUMMARY_MAX_MSGS", "单次增量上限", "int", hint="超过只取最近这些，水位线直推最新"),
             _field("LLM_COMPRESS_THRESHOLD", "触发压缩条数", "int", hint="会话消息超过该数时把旧消息压进摘要"),
-            _field("LLM_GROUP_CONTEXT_MSGS", "群聊注入上下文条数", "int", hint="群聊回复时从聊天流水取最近多少条"),
         ],
     },
 ]

@@ -157,11 +157,8 @@ class Settings(BaseSettings):
     llm_summary_model: str = ""
     # 单次总结最多取多少条增量（超过则只取最近这些，水位线直推最新）
     llm_summary_max_msgs: int = 300
-    # 会话未压缩消息达到该条数时，把旧消息压进 llm_session.summary
     # 触发压缩的会话消息条数；实际保留窗口 = 2×LLM_CONTEXT_ROUNDS（与注入窗口对齐）
     llm_compress_threshold: int = 20
-    # 群聊上下文注入时从 chat_message 取最近多少条群消息
-    llm_group_context_msgs: int = 10
 
     # ============ 版本控制（WebUI 设置页「一键更新」，见 src/core/vcs.py） ============
     # 用途：本地开发机 push → 服务器生产环境在 WebUI 点一下拉取最新代码

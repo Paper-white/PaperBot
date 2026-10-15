@@ -50,7 +50,7 @@ LLM 相关的键分三组，**完整定义与默认值一律看** [`configuratio
 |---|---|---|
 | **LLM 兜底与运行参数** | `LLM_ENABLE` / `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_TIMEOUT` / `LLM_PROXY` / `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_DEFAULT_PRESET` / `LLM_STREAM_ENABLE` / `LLM_MEMORY_ENABLE` / `LLM_CONTEXT_ROUNDS` / `LLM_MAX_FACTS` | `configuration.md` |
 | **聊天记录** | `CHATLOG_ENABLE` | `configuration.md` |
-| **定时总结与压缩** | `LLM_SUMMARY_ENABLE` / `LLM_SUMMARY_INTERVAL` / `LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL` / `LLM_SUMMARY_MAX_MSGS` / `LLM_COMPRESS_THRESHOLD` / `LLM_GROUP_CONTEXT_MSGS` | `configuration.md` |
+| **定时总结与压缩** | `LLM_SUMMARY_ENABLE` / `LLM_SUMMARY_INTERVAL` / `LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL` / `LLM_SUMMARY_MAX_MSGS` / `LLM_COMPRESS_THRESHOLD` | `configuration.md` |
 
 > ⚠️ `.env` 里的 LLM 相关键也能在 WebUI **「LLM 与记忆」页 → 「运行参数」分组**里改；
 > 这类键属**可热更**，改完点「系统配置」页的 **「热重载配置」**（或 QQ `%reload`）即生效，无需重启。
@@ -194,7 +194,7 @@ enabled: true              # 可选：默认 true
 ## 4. 上下文与长期记忆
 
 > 记忆与上下文相关的 `.env` 键（`LLM_CONTEXT_ROUNDS` / `LLM_MEMORY_ENABLE` / `LLM_MAX_FACTS` /
-> `LLM_SUMMARY_*` / `LLM_COMPRESS_THRESHOLD` / `LLM_GROUP_CONTEXT_MSGS`）定义见 [`configuration.md`](configuration.md)。
+> `LLM_SUMMARY_*` / `LLM_COMPRESS_THRESHOLD`）定义见 [`configuration.md`](configuration.md)。
 
 ### 4.1 上下文（短期）
 

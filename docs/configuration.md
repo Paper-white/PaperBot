@@ -117,7 +117,6 @@ Copy-Item .env.example .config\main\.env
 | `LLM_SUMMARY_MODEL` | 空 | 总结用模型（留空 = 服务商首选；建议填便宜模型） |
 | `LLM_SUMMARY_MAX_MSGS` | `300` | 单次总结最多取多少条增量（超出只取最近，水位线直推） |
 | `LLM_COMPRESS_THRESHOLD` | `20` | 会话消息超过该数时把旧消息压进 `llm_session.summary`（**保留窗口 = 2×`LLM_CONTEXT_ROUNDS`**，与注入窗口对齐） |
-| `LLM_GROUP_CONTEXT_MSGS` | `10` | ⚠️ **已废弃**（死配置）：群聊注入条数实际由插件配置 `paperbot_chat.group_history` 控制 |
 
 详见 [`llm.md`](llm.md)。
 
