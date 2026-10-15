@@ -28,7 +28,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterable, Optional, Sequence
 
@@ -1446,7 +1446,8 @@ _IMPRESSION_PROMPT = (
 - facts 最多 8 条，只保留对长期个性化有用的（称呼、偏好、身份、习惯、禁忌等）；
 """
     + _FACT_KEY_LINE
-    + """- 没有新信息时返回空数组；
+    + """- 消息里形如「明天（2026-10-16）」是原始相对时间的**绝对日期标注**；记录时间相关事实时请用绝对日期。
+- 没有新信息时返回空数组；
 - 不要记录密码、密钥等隐私敏感信息。
 
 【旧印象】{old}
@@ -1469,7 +1470,8 @@ _GROUP_USER_FACT_PROMPT = (
 - 不要编造；没有新信息时返回空数组；最多 6 条；
 """
     + _FACT_KEY_LINE
-    + """- 不要记录密码、密钥等隐私敏感信息。
+    + """- 消息里形如「明天（2026-10-16）」是原始相对时间的**绝对日期标注**；记录时间相关事实时请用绝对日期。
+- 不要记录密码、密钥等隐私敏感信息。
 
 【旧关键信息】{old_facts}
 【该用户在本群的发言】
@@ -1497,6 +1499,57 @@ def _convo_lines(msgs: list[dict]) -> str:
     return "\n".join(
         f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}" for m in msgs
     )
+
+
+# 相对日期词 → 相对发送日的天数偏移（只做「日」粒度，保守不碰「下周X/上周X」等复杂表述）
+_RELATIVE_DAYS: dict[str, int] = {
+    "大前天": -3,
+    "前天": -2,
+    "昨天": -1,
+    "今日": 0,
+    "今天": 0,
+    "明天": 1,
+    "后天": 2,
+    "大后天": 3,
+}
+
+# 词表按「长度降序」组成正则：正则分支从左到右优先，长词在前即可保证
+# 「大后天」不会被「后天」抢先命中；且 re.sub 不会重扫替换后的文本。
+_RELATIVE_RE = re.compile("|".join(sorted(_RELATIVE_DAYS, key=len, reverse=True)))
+
+
+def _annotate_relative_dates(text: str, sent_at: str) -> str:
+    """把消息里的相对日期词内联标注成「词（绝对日期）」，如「明天（2026-10-16）」。
+
+    `sent_at` 为该消息发送时间的北京时间字符串（形如 `2026-10-15 20:00:00`，
+    取自 chat_message.created_at）；解析失败则原样返回。
+    """
+    raw = (text or "").strip()
+    if not raw or not sent_at:
+        return raw
+    try:
+        day = datetime.strptime(sent_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CST)
+    except (ValueError, TypeError):
+        return raw
+
+    def _repl(match: re.Match) -> str:
+        word = match.group(0)
+        target = (day + timedelta(days=_RELATIVE_DAYS[word])).strftime("%Y-%m-%d")
+        return f"{word}（{target}）"
+
+    return _RELATIVE_RE.sub(_repl, raw)
+
+
+def _annotate_batch(msgs: list[dict]) -> list[dict]:
+    """返回标注了相对日期的新批次（不修改入参）；供提炼 prompt 与闸门共用同一份文本。"""
+    out: list[dict] = []
+    for m in msgs:
+        item = dict(m)
+        item["content"] = _annotate_relative_dates(
+            str(m.get("content") or ""), str(m.get("created_at") or "")
+        )
+        out.append(item)
+    return out
 
 
 def _extract_json(text: str) -> dict:
@@ -2170,6 +2223,8 @@ async def summarize_user(user_id: str | int) -> dict:
         msgs = [m for m in msgs if not m.get("is_bot")]
         if not msgs:
             return {"ok": True, "reason": "没有增量", "user_id": uid}
+        # 相对日期内联标注：prompt 与闸门 source_msgs 用同一份标注文本（保留 id）
+        msgs = _annotate_batch(msgs)
 
         if settings.llm_memory_scope_isolation:
             for (stype, sid), batch in _group_by_scope(msgs).items():
@@ -2209,6 +2264,8 @@ async def summarize_group(group_id: str | int) -> dict:
         )
         if not msgs:
             return {"ok": True, "reason": "没有增量", "group_id": gid}
+        # 相对日期内联标注（保留 id，供末尾水位线使用）
+        msgs = _annotate_batch(msgs)
         convo = "\n".join(
             f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}"
             for m in msgs
