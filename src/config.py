@@ -175,6 +175,134 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# 本文件 `Settings` 里，改了必须重启才生效的项（其余视为可热更——调用时现读）。
+# 说明：
+#   · webui_enable / webui_prefix  —— 路由注册在应用启动时完成；
+#   · database_url                 —— 数据库 engine 已建好，连接串改不掉；
+#   · log_* / log_level 等         —— 日志 handler 在启动时装配完毕。
+# 除以上之外的字段都视为「可热更」：直接原地覆盖 `settings` 即可让
+# `from src.config import settings` 的模块立刻读到新值。
+# （NoneBot 自己的驱动配置另见下方 NONEBOT_HOT_KEYS / NONEBOT_RESTART_KEYS。）
+RESTART_ONLY_KEYS = {
+    "webui_enable", "webui_prefix",
+    "database_url",
+    "log_level", "log_file_enable", "log_file_level", "log_dir", "log_keep_days",
+}
+
+# NoneBot 驱动配置（`nonebot.get_driver().config`）里，改完能**立即生效**的键。
+# 这些键不属于上面的 `Settings`，要单独比对；目前只有 superusers：
+# 权限校验（NoneBot 的 SUPERUSER + 本项目的 permission.owner_ids）每次都现读
+# `driver.config.superusers`，所以原地 setattr 即刻生效，无需重启。
+NONEBOT_HOT_KEYS = {"superusers"}
+# NoneBot 驱动配置里改了**必须重启**的键（仅用于给出可读提示，避免误报）。
+NONEBOT_RESTART_KEYS = {
+    "driver", "host", "port",
+    "command_start",
+    "onebot_ws_urls", "onebot_v11_ws_urls", "onebot_access_token",
+}
+
+
+def _reload_nonebot_config() -> tuple[list[str], list[str]]:
+    """重读 `.env`，热更新 NoneBot 驱动配置里「可热更」的键。
+
+    ⚠️ 为什么单独做：`HOST` / `PORT` / `DRIVER` / `SUPERUSERS` / `COMMAND_START` /
+    `ONEBOT_*` 这些是 **NoneBot 自己的配置**（`nonebot.get_driver().config`），
+    不在本文件 `Settings` 的 `model_fields` 里——只比对 `Settings` 会漏掉它们，
+    表现为「明明改了 SUPERUSERS，热重载却说无变动」。
+
+    返回 `(hot, restart)`，键名用 `.env` 里的大写写法（更贴近用户编辑的内容）。
+    驱动未就绪（如自检脚本）时安静返回空。
+    """
+    hot: list[str] = []
+    restart: list[str] = []
+    try:
+        import nonebot
+
+        current = nonebot.get_driver().config
+    except Exception:  # noqa: BLE001 - 未 init / 非驱动环境，直接跳过
+        return hot, restart
+
+    try:
+        from nonebot.config import Config as NoneBotConfig
+
+        # bot.py 里是 `nonebot.init(_env_file=MAIN_ENV_PATH)`，这里用同一来源重建一份做比对
+        # （用绝对路径，避免热重载时 cwd 不同导致读错文件）
+        fresh = NoneBotConfig(_env_file=str(BASE_DIR / MAIN_ENV_PATH))
+    except Exception:  # noqa: BLE001 - 重建失败就只当作没变化
+        return hot, restart
+
+    for name in type(fresh).model_fields:
+        try:
+            old_value = getattr(current, name, None)
+            new_value = getattr(fresh, name, None)
+        except Exception:  # noqa: BLE001 - 个别字段取不到就跳过
+            continue
+        if old_value == new_value:
+            continue
+        env_key = name.upper()
+        if name in NONEBOT_HOT_KEYS:
+            try:
+                setattr(current, name, new_value)
+                hot.append(env_key)
+                continue
+            except Exception:  # noqa: BLE001 - 改不动就当需重启
+                pass
+        if name in NONEBOT_RESTART_KEYS:
+            restart.append(env_key)
+    return hot, restart
+
+
+def reload_settings() -> dict:
+    """重新读取 `.config/main/.env`，把能热更的字段**原地**写回 `settings`。
+
+    为什么用「原地 setattr」而不是 `global settings; settings = Settings()`：
+        `settings` 是模块级单例，项目里大量模块用 `from src.config import settings`
+        拿到了**同一个对象引用**。如果整体替换对象，那些模块手里的引用还是旧对象，
+        热重载就白做了。逐字段 `setattr(settings, ...)` 能保持对象 identity 不变，
+        所有持有引用的模块立刻看到新值。
+
+    ⚠️ 只读取一次 .env（由 `Settings` 的 `env_file` 决定路径），函数内不会改动
+        全局的环境变量或 env 文件位置，避免热重载把配置来源改乱。
+
+    返回：
+        {
+            "changed": [...],   # 实际发生变化的字段名（下划线形式）
+            "hot":     [...],   # 其中可热更、已生效的
+            "restart": [...],   # 其中需要重启才生效的
+            "message": "...",   # 中文可读摘要
+        }
+    """
+    fresh = Settings()
+
+    changed: list[str] = []
+    for name in type(fresh).model_fields:
+        old_value = getattr(settings, name, None)
+        new_value = getattr(fresh, name)
+        if old_value != new_value:
+            setattr(settings, name, new_value)
+            changed.append(name)
+
+    hot = [n for n in changed if n not in RESTART_ONLY_KEYS]
+    restart = [n for n in changed if n in RESTART_ONLY_KEYS]
+
+    # 再补上 NoneBot 驱动配置（HOST/PORT/DRIVER/SUPERUSERS/COMMAND_START/ONEBOT_* 等，
+    # 不在上面的 Settings 里，否则改 SUPERUSERS 会「无变动」）。键名统一用大写写法。
+    driver_hot, driver_restart = _reload_nonebot_config()
+    hot.extend(k for k in driver_hot if k not in hot)
+    restart.extend(k for k in driver_restart if k not in restart)
+
+    if not hot and not restart:
+        message = "配置无变化"
+    else:
+        parts = []
+        if hot:
+            parts.append(f"已热重载 {len(hot)} 项：{'、'.join(hot)}")
+        if restart:
+            parts.append(f"另有 {len(restart)} 项需重启：{'、'.join(restart)}")
+        message = "；".join(parts) or "配置无变化"
+
+    return {"changed": hot + restart, "hot": hot, "restart": restart, "message": message}
+
 
 def active_groups() -> set[str]:
     """「Bot 允许活跃的群」白名单（门控默认策略 + 输出守卫共用）。

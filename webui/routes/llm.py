@@ -129,6 +129,9 @@ def _masked_key(value: Optional[str]) -> Optional[str]:
 @router.get("/llm/status")
 async def llm_status() -> dict:
     """LLM 总览：可用性 / 开关 / 默认服务商 / 各种计数。"""
+    # 延迟 import：`webui.routes.config` 会 import `src.config`，放函数内可避免模块级循环导入
+    from webui.routes.config import llm_sections
+
     providers = await llm.list_providers()
     active = next((p for p in providers if p.get("is_default") and p.get("enabled")), None)
     if active is None:
@@ -159,6 +162,9 @@ async def llm_status() -> dict:
         "session_messages": sum(int(s.get("message_count") or 0) for s in sessions),
         "scope_labels": SCOPE_LABELS,
         "secret_placeholder": llm.SECRET_MASK,
+        # 「LLM」页专用的 .env 兜底 / 定时总结配置分组（字段结构与 /api/config 一致，
+        # 前端直接喂给 configBlock / openConfigModal）
+        "env_sections": llm_sections(),
     }
 
 

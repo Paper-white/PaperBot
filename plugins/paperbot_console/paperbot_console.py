@@ -12,6 +12,7 @@
     %admin add <QQ> [群号]    授予该用户 2 级管理员权限（仅在对应群生效）          【所有者】
     %admin del <QQ> [群号]    移除手动授予的管理员权限                            【所有者】
     %reset <插件名> [作用域]  清除某作用域规则（额外提供）                         【所有者】
+    %reload  重新读取 .config/main/.env（可热更项立即生效，列需重启项）            【所有者】
 
 「所有者」= `.env` 的 `SUPERUSERS`。
 """
@@ -84,6 +85,13 @@ reset_cmd = feature.command(
     permission=SUPERUSER,
     priority=1,
     description="清除某插件在指定作用域的规则（全局 / 本群 / 群:号 / 用户:号）",
+)
+reload_cmd = feature.command(
+    "reload",
+    aliases={"重载", "reloadcfg", "刷新配置"},
+    permission=SUPERUSER,
+    priority=1,
+    description="重新读取 .config/main/.env：可热更项立即生效，并列出需重启项",
 )
 
 ADMIN_HELP = (
@@ -371,6 +379,30 @@ async def _handle_reset(event: MessageEvent, args: Message = CommandArg()) -> No
     if removed:
         await reset_cmd.finish(f"{_OK} 已清除「{name}」在 {label} 的规则")
     await reset_cmd.finish(f"ℹ️ 「{name}」在 {label} 本来就没有规则")
+
+
+@reload_cmd.handle()
+async def _handle_reload(event: MessageEvent) -> None:
+    from src.config import reload_settings  # 延迟 import，避免无谓依赖
+
+    try:
+        result = reload_settings()
+    except Exception as exc:
+        await reload_cmd.finish(f"{_ERR} 热重载失败：{exc}")
+
+    changed = result.get("changed") or []
+    hot = result.get("hot") or []
+    restart = result.get("restart") or []
+    if not changed:
+        await reload_cmd.finish("ℹ️ 配置无变化（.config/main/.env 与当前一致）")
+
+    lines = [f"{_OK} 已重新读取 .config/main/.env"]
+    if hot:
+        lines.append("已热更生效：" + "、".join(hot))
+    if restart:
+        lines.append("需重启才生效：" + "、".join(restart))
+    lines.append("（提示：WebUI「设置」页也有「热重载配置」按钮）")
+    await reload_cmd.finish("\n".join(lines))
 
 
 async def _apply_toggle(matcher, event: MessageEvent, args: Message, enabled: bool) -> None:

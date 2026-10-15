@@ -462,13 +462,19 @@
     var note = isAdapter
       ? (item.available === false ? badge('暂未支持', 'amber') + ' ' : badge('可用', 'green') + ' ') + esc(item.note || '')
       : esc(item.note || '');
+    // ⚠️ 「字段区 + 保存按钮 + 底部提示」必须整体包在 data-config-block 内，
+    //    否则 bindConfigSaves 里 `btn.closest('[data-config-block]')` 拿到 null，
+    //    collectConfig(null) 抛异常，保存请求根本发不出去（结构同 pluginDetailBody 的 data-plugin-config-block）。
     var body =
       (note ? '<div class="card-note" style="margin-bottom:12px">' + note + '</div>' : '') +
-      '<div class="form-grid" data-config-block data-config-id="' + esc(item.id || item.name) + '">' +
+      '<div data-config-block data-config-id="' + esc(item.id || item.name) + '">' +
+      '<div class="form-grid">' +
       item.fields.map(function (f) { return fieldInput(f, { noMissing: true }); }).join('') +
       '</div>' +
       '<div class="form-row spaced"><button class="btn" data-config-save>保存本节</button></div>' +
-      '<div class="hint spaced">写入 <span class="mono">.config/main/.env</span>（自动备份 .env.bak），<b>需重启 Bot 生效</b>；敏感字段留空即不修改。</div>';
+      '<div class="hint spaced">写入 <span class="mono">.config/main/.env</span>（自动备份 .env.bak），' +
+      '<b>需重启 Bot 生效</b>（部分可热更项可点右上角「重载」立即生效）；敏感字段留空即不修改。</div>' +
+      '</div>';
     var container = openModal(esc(item.name), body);
     bindChips(container);
     bindConfigSaves(container);
@@ -499,7 +505,7 @@
       return (
         '<div class="error-box warn">' +
         '点击任意分组卡片可打开编辑浮窗；配置写入 <span class="mono">' + esc(d.path) + '</span>（自动备份 .env.bak），' +
-        '<b>需要重启 Bot 才会生效</b>。敏感字段不回显，留空即不修改。' +
+        '<b>需重启 Bot 才会生效</b>；改完可点右上角「重载」让可热更项立即生效。敏感字段不回显，留空即不修改。' +
         '</div>' +
         '<div class="grid config-grid">' + adapterCards + sectionCards + '</div>'
       );
@@ -582,17 +588,28 @@
         });
       }
     });
-    // 删除（事件委托，兼容后加的 chip）
-    scope.addEventListener('click', function (ev) {
+
+    // 删除（事件委托，兼容后加的 chip）。
+    // ⚠️ 去重（不叠加委托）：浮窗复用的是同一个 #modal-body，主页面复用的是同一个 #content，
+    //    所以同一次会话里 bindChips 会被反复调用到同一个 scope 上。
+    //    注意不能用「已绑定就 return」的朴素标记——#content 会被复用、内容被 innerHTML 换掉，
+    //    一旦 return 就再也不会重新绑定（切页后 chips 就哑了）。这里改成：
+    //    把上一次的委托函数记在 scope 上，挂新的之前先摘掉旧的，对复用元素与全新元素都安全。
+    if (scope.__chipsDelegation) {
+      scope.removeEventListener('click', scope.__chipsDelegation);
+    }
+    scope.__chipsDelegation = function (ev) {
       var t = ev.target;
       if (t && t.dataset && t.dataset.chipDel !== undefined) {
         var box = t.closest('[data-chips]');
+        if (!box) return;
         t.closest('.chip').remove();
         var key = box.dataset.chips;
         var hidden = scope.querySelector('input[type=hidden][data-key="' + key + '"]');
         if (hidden) hidden.value = JSON.stringify(collectChips(box));
       }
-    });
+    };
+    scope.addEventListener('click', scope.__chipsDelegation);
   }
 
   // 长下拉的过滤输入：输入关键字，隐藏不匹配的 <option>
@@ -961,10 +978,6 @@
         '<button class="btn" data-rule-add="' + esc(p.name) + '">写入规则</button>' +
         '</div>';
 
-    var headActions = p.reloadable
-      ? '<button class="btn small" data-plugin-reload="' + esc(p.name) + '">热重载</button>'
-      : '';
-
     var toggle =
       '<label class="switch" title="' + (locked ? '受保护插件不可关闭' : '全局开关') + '">' +
       '<input type="checkbox" data-global-toggle="' + esc(p.name) + '"' +
@@ -983,8 +996,7 @@
       '</div>' +
       '<div class="detail-section"><div class="detail-title">门控规则</div>' + rules + addForm + '</div>' +
       '<div class="detail-section"><div class="detail-title">注册命令</div>' + commands + '</div>' +
-      (configFields.length ? '<div class="detail-section"><div class="detail-title">插件配置项</div>' + configBlock + '</div>' : '') +
-      (headActions ? '<div class="form-row spaced">' + headActions + '</div>' : '')
+      (configFields.length ? '<div class="detail-section"><div class="detail-title">插件配置项</div>' + configBlock + '</div>' : '')
     );
   }
 
@@ -1066,8 +1078,8 @@
           .join('');
 
         return (
-          '<div class="error-box warn">点击插件卡片可打开详情浮窗（门控规则 / 命令 / 配置项 / 热重载）。' +
-          '受保护插件（如总控插件）不允许通过 WebUI 关闭或热重载。</div>' +
+          '<div class="error-box warn">点击插件卡片可打开详情浮窗（门控规则 / 命令 / 配置项）。' +
+          '改插件代码后可用右上角「重载」；受保护插件不允许通过 WebUI 关闭。</div>' +
           (cards ? '<div class="plugin-grid">' + cards + '</div>' : empty('没有加载任何插件'))
         );
       });
@@ -1186,29 +1198,6 @@
           })
           .catch(function (err) {
             toast('操作失败：' + err.message, 'err');
-          })
-          .then(function () {
-            btn.disabled = false;
-          });
-      });
-    });
-
-    // 热重载
-    scope.querySelectorAll('[data-plugin-reload]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var name = btn.dataset.pluginReload;
-        btn.disabled = true;
-        send('/plugins/' + encodeURIComponent(name) + '/reload', 'POST')
-          .then(function (res) {
-            toast(
-              '已热重载 ' + name + '（销毁 ' + res.removed_matchers + ' 个 matcher，v' + res.version + '）',
-              'ok'
-            );
-            closePluginModal();
-            render();
-          })
-          .catch(function (err) {
-            toast('热重载失败：' + err.message, 'err');
           })
           .then(function () {
             btn.disabled = false;
@@ -2178,7 +2167,26 @@
         groups.count + ' 个群（最多列 50）'
       );
 
-      var html = overview + provCard + chatCard + presetCard + sessionCard + userCard + groupCard;
+      // 运行参数（.env 兜底 + 定时总结）：后端已把这组从「系统配置」页挪到 LLM 页，
+      // 字段结构与 /api/config 的 section 完全一致，直接复用 configBlock（点击弹浮窗编辑）
+      var envSections = st.env_sections || [];
+      envSections.forEach(function (s) {
+        _configItems[s.id || s.name] = { item: s, isAdapter: false };
+      });
+      var envCards = envSections
+        .map(function (s) {
+          return configBlock(s, false);
+        })
+        .join('');
+      var envBox = envCards
+        ? '<div class="error-box warn">运行参数（写入 <span class="mono">.config/main/.env</span>，' +
+          '修改后点右上角「重载」（可热更项立即生效）或重启 Bot 生效）。' +
+          '服务商 / 人设存在数据库里，<b>改完即时生效</b>；这里只作 .env 兜底。</div>' +
+          '<div class="grid config-grid">' + envCards + '</div>'
+        : '';
+
+      var html =
+        overview + provCard + chatCard + presetCard + sessionCard + userCard + groupCard + envBox;
       return html;
 
     });
@@ -2352,6 +2360,18 @@
     root.querySelectorAll('[data-filter-for]').forEach(function (box) {
       bindSelectFilter(root, box, root.querySelector('#' + box.dataset.filterFor));
     });
+
+    /* ---- 运行参数（.env 兜底 + 定时总结）：点击摘要卡弹浮窗编辑 ---- */
+    // 这组卡片由 pageLlm 渲染一次，这里直接绑一次即可（不要再在末尾粘一遍）
+    on(root, '[data-config-card]', 'click', function (card) {
+      var entry = _configItems[card.dataset.configCard];
+      if (!entry) return;
+      openConfigModal(entry.item, entry.isAdapter);
+    });
+    // chips（list 字段）/ 长下拉过滤 / 保存按钮：与系统配置页同款绑定
+    bindChips(root);
+    bindSelectFilters(root);
+    bindConfigSaves(root);
 
     /* ---- 服务商 ---- */
     var saveProv = root.querySelector('[data-llm-prov-save]');
@@ -2850,6 +2870,37 @@
       render();
     });
     document.getElementById('refresh').addEventListener('click', render);
+
+    // 全局重载：重读 .env 配置 + 重载所有插件（POST /reload）
+    var reloadAllBtn = document.getElementById('reload-all');
+    if (reloadAllBtn) {
+      reloadAllBtn.addEventListener('click', function () {
+        if (!confirm('重载会重新读取 .env 并重载所有插件，确认？')) return;
+        reloadAllBtn.disabled = true;
+        send('/reload', 'POST')
+          .then(function (res) {
+            toast((res && res.message) || '已重载', 'ok');
+            var restart = (res && res.config && res.config.restart) || [];
+            if (restart.length) {
+              toast('以下配置项需重启生效：' + restart.join('、'), 'err');
+            }
+            var failed = (res && res.plugins && res.plugins.failed) || [];
+            if (failed.length) {
+              toast(
+                '部分插件重载失败：' + failed.map(function (f) { return f.name; }).join('、'),
+                'err'
+              );
+            }
+            render();
+          })
+          .catch(function (err) {
+            toast('重载失败：' + err.message, 'err');
+          })
+          .then(function () {
+            reloadAllBtn.disabled = false;
+          });
+      });
+    }
 
     // 浮窗关闭：× 按钮 + 点遮罩空白处（全局绑一次）
     var overlay = document.getElementById('modal-overlay');

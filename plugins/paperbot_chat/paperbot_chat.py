@@ -103,6 +103,27 @@ feature = Feature(
             "default": 10,
             "hint": "把群里最近的 N 条消息拼进上下文，让回复更懂氛围；0 = 不注入",
         },
+        {
+            "key": "bot_names",
+            "label": "bot 昵称（逗号分隔，可多个）",
+            "type": "text",
+            "default": "小白纸",
+            "hint": "多个昵称用英文逗号「,」或中文逗号「，」分隔；用于「昵称触发」与「捂嘴」识别",
+        },
+        {
+            "key": "mute_words",
+            "label": "捂嘴触发词（逗号分隔）",
+            "type": "text",
+            "default": "闭嘴,安静,别说了,shut up",
+            "hint": "多个词用英文逗号「,」或中文逗号「，」分隔；昵称紧挨触发词（如「小白纸闭嘴」）会关闭本群对话模式",
+        },
+        {
+            "key": "nickname_trigger",
+            "label": "昵称也能触发对话模式",
+            "type": "bool",
+            "default": True,
+            "hint": "开启后在群里提到 bot 昵称即可触发对话模式；关闭后只有艾特能触发",
+        },
     ],
 )
 
@@ -120,6 +141,36 @@ _COOLDOWN: dict[str, float] = {}
 
 # 群聊对话模式：{群号: {"active": 最后活跃时间, "reply": 上次回复时间}}
 _GROUP_MODE: dict[str, dict[str, float]] = {}
+
+
+def _split_words(raw: str) -> list[str]:
+    """把配置里的逗号分隔字符串拆成去空、去重的词列表。
+
+    支持英文逗号 `,`、中文逗号 `，`、顿号 `、`、分号 `;`/`；`、换行等分隔符。
+    空串返回 `[]`；保持出现顺序去重。
+    """
+    text = (raw or "").replace(",", "\n").replace("，", "\n")
+    for sep in ("、", "；", ";", "\r", "\n"):
+        text = text.replace(sep, "\n")
+    words: list[str] = []
+    seen: set[str] = set()
+    for piece in text.split("\n"):
+        word = piece.strip()
+        if word and word not in seen:
+            seen.add(word)
+            words.append(word)
+    return words
+
+
+def _bot_names() -> list[str]:
+    """bot 昵称列表（配置里拆出来，空则回退默认「小白纸」）。"""
+    names = _split_words(feature.cfg("bot_names", "小白纸") or "小白纸")
+    return names or ["小白纸"]
+
+
+def _mute_words() -> list[str]:
+    """捂嘴触发词列表（默认词串见 config_schema.mute_words）。"""
+    return _split_words(feature.cfg("mute_words", "") or "闭嘴,安静,别说了,shut up")
 
 
 def _command_starts() -> tuple[str, ...]:
@@ -197,6 +248,23 @@ def _touch_group(gid: str) -> None:
     mode["active"] = time.monotonic()
 
 
+def _mute_hit(text: str) -> bool:
+    """「捂嘴」固定搭配判断：昵称紧挨触发词，中间不能夹任何字符。
+
+    遍历「昵称 × 触发词」的全部组合，只要 `昵称+触发词` 相邻出现在原文里就算命中
+    （如「小白纸闭嘴」命中，「小白纸，闭嘴」不算）。英文（如 shut up）忽略大小写：
+    把原文与候选都转小写后比较，因此「Shut Up」「SHUT UP」也能识别。
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    for name in _bot_names():
+        for word in _mute_words():
+            if name and word and f"{name.lower()}{word.lower()}" in lowered:
+                return True
+    return False
+
+
 async def _preset_for(scope: str, scope_id: str) -> str:
     """会话里存的人设优先 → 插件配置 → 空（= 全局默认）。"""
     info = await feature.llm.context(scope, scope_id)
@@ -251,18 +319,30 @@ async def _handle_group_chat(event: GroupMessageEvent) -> None:
         return
     text = event.get_plaintext().strip()
     to_me = bool(getattr(event, "to_me", False))
+    hit_name = any(n and n in text for n in _bot_names())
 
-    # ① 艾特触发：开启（或续期）本群对话模式
-    if to_me:
+    # ⓪ 捂嘴：昵称紧挨触发词（固定搭配），必须先于任何触发逻辑处理
+    #    对话模式开着 → 关掉并回一句确认；没开 → 静默忽略（不打扰）
+    if _mute_hit(text):
+        if _group_mode_active(gid):
+            _GROUP_MODE.pop(gid, None)
+            feature.logger.info(f"群 {gid} 被「捂嘴」关闭对话模式（{text!r}）")
+            await group_chat.finish("好，我不说了～（想再聊就叫我一声）")
+        return
+
+    # ① 触发（艾特 或 昵称触发）：开启（或续期）本群对话模式
+    triggered = to_me or (feature.cfg("nickname_trigger", True) and hit_name)
+    if triggered:
         _touch_group(gid)
-        feature.logger.info(f"群 {gid} 的对话模式已开启/续期（@触发）")
+        how = "艾特" if to_me else "昵称"
+        feature.logger.info(f"群 {gid} 的对话模式已开启/续期（{how}触发）")
         left = _group_cooldown_left(gid)
         if left:
             await group_chat.finish(f"在啦在啦～（{left} 秒后再找我哦）")
         await _group_talk(event, gid, text, triggered=True)
         return
 
-    # ② 未艾特：只有对话模式有效期内才自动接话
+    # ② 未触发：只有对话模式有效期内才自动接话
     if not _group_mode_active(gid):
         return
     _touch_group(gid)

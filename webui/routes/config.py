@@ -9,11 +9,14 @@ from __future__ import annotations
 import shutil
 from typing import Any, Optional
 
+import nonebot
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from src.config import active_groups, settings
+from src.config import active_groups, reload_settings, settings
 from webui import envfile
 from webui.deps import SECRET_PLACEHOLDER, mask_secret, require_token
+
+logger = nonebot.logger
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["config"])
 
@@ -100,6 +103,21 @@ SECTIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "chatlog",
+        "name": "聊天记录",
+        "note": "原始流水层：全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表，记忆提炼与群聊上下文都从这取",
+        "fields": [
+            _field("CHATLOG_ENABLE", "启用聊天记录", "bool", hint="关闭后不再落流水，记忆与群聊上下文也随之停止更新"),
+        ],
+    },
+]
+
+# 「数据库」与「图片渲染」两组已从系统配置页**移除**（不再由 `SECTIONS` 渲染，
+# 页面上的卡片随之消失）。这里仅**保留字段定义**用于兼容 `PUT /api/config` 的校验：
+# `_FIELD_INDEX` 仍会收录这些键，否则前端/旧调用方写这两个键会被 400
+# 「不支持的配置项」拒掉。⚠️ 请勿把它们塞回 `SECTIONS`。
+HIDDEN_SECTIONS: list[dict[str, Any]] = [
+    {
         "id": "database",
         "name": "数据库",
         "note": "所有插件共享同一个 SQLite",
@@ -107,6 +125,27 @@ SECTIONS: list[dict[str, Any]] = [
             _field("DATABASE_URL", "连接串", hint="sqlite+aiosqlite:///data/paperbot.db"),
         ],
     },
+    {
+        "id": "render",
+        "name": "图片渲染",
+        "note": "文本 / Markdown → PNG",
+        "fields": [
+            _field("RENDER_WIDTH", "画布宽度", "int"),
+            _field("RENDER_SCALE", "缩放倍率", "int", hint="输出宽度 = 宽度 × 倍率"),
+            _field("RENDER_BROWSER_CHANNEL", "浏览器通道", choices=["msedge", "chromium"]),
+            _field("RENDER_BROWSER_PATH", "浏览器可执行文件", hint="留空则用系统浏览器"),
+            _field("RENDER_BG_IMAGE", "背景贴图", hint="留空不叠图"),
+            _field("RENDER_BG_IMAGE_OPACITY", "叠图不透明度", "float"),
+            _field("RENDER_BG_IMAGE_SIZE", "叠图尺寸"),
+            _field("RENDER_BG_IMAGE_POSITION", "叠图位置"),
+        ],
+    },
+]
+
+# 「LLM」页专用的配置分组（从系统配置页抽出，改由 LLM 页渲染）。
+# ⚠️ 抽取时字段 / hint 一字未改，只是换了归属页；务必保证 _FIELD_INDEX 仍收录这些键，
+#    否则 `PUT /api/config` 会以「不支持的配置项」400 拒绝写入。
+LLM_SECTIONS: list[dict[str, Any]] = [
     {
         "id": "llm",
         "name": "LLM 兜底与行为",
@@ -131,14 +170,6 @@ SECTIONS: list[dict[str, Any]] = [
         ],
     },
     {
-        "id": "chatlog",
-        "name": "聊天记录",
-        "note": "原始流水层：全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表，记忆提炼与群聊上下文都从这取",
-        "fields": [
-            _field("CHATLOG_ENABLE", "启用聊天记录", "bool", hint="关闭后不再落流水，记忆与群聊上下文也随之停止更新"),
-        ],
-    },
-    {
         "id": "summary",
         "name": "定时记忆总结与上下文压缩",
         "note": "后台任务每 N 分钟增量总结个人/群记忆，并把超长会话压缩成摘要",
@@ -150,21 +181,6 @@ SECTIONS: list[dict[str, Any]] = [
             _field("LLM_SUMMARY_MAX_MSGS", "单次增量上限", "int", hint="超过只取最近这些，水位线直推最新"),
             _field("LLM_COMPRESS_THRESHOLD", "触发压缩条数", "int", hint="会话消息超过该数时把旧消息压进摘要"),
             _field("LLM_GROUP_CONTEXT_MSGS", "群聊注入上下文条数", "int", hint="群聊回复时从聊天流水取最近多少条"),
-        ],
-    },
-    {
-        "id": "render",
-        "name": "图片渲染",
-        "note": "文本 / Markdown → PNG",
-        "fields": [
-            _field("RENDER_WIDTH", "画布宽度", "int"),
-            _field("RENDER_SCALE", "缩放倍率", "int", hint="输出宽度 = 宽度 × 倍率"),
-            _field("RENDER_BROWSER_CHANNEL", "浏览器通道", choices=["msedge", "chromium"]),
-            _field("RENDER_BROWSER_PATH", "浏览器可执行文件", hint="留空则用系统浏览器"),
-            _field("RENDER_BG_IMAGE", "背景贴图", hint="留空不叠图"),
-            _field("RENDER_BG_IMAGE_OPACITY", "叠图不透明度", "float"),
-            _field("RENDER_BG_IMAGE_SIZE", "叠图尺寸"),
-            _field("RENDER_BG_IMAGE_POSITION", "叠图位置"),
         ],
     },
 ]
@@ -212,7 +228,9 @@ LOGS_SECTIONS: list[dict[str, Any]] = [
 
 _FIELD_INDEX: dict[str, dict[str, Any]] = {
     f["key"]: f
-    for section in (SECTIONS + SETTINGS_SECTIONS + LOGS_SECTIONS)
+    for section in (
+        SECTIONS + SETTINGS_SECTIONS + LOGS_SECTIONS + LLM_SECTIONS + HIDDEN_SECTIONS
+    )
     for f in section["fields"]
 }
 _FIELD_INDEX.update({f["key"]: f for f in QQ_ADAPTER["fields"]})
@@ -263,6 +281,14 @@ def render_sections(
     if env is None:
         env = envfile.read_env()
     return [_render_section(section, env) for section in sections]
+
+
+def llm_sections(env: Optional[dict[str, str]] = None) -> list[dict[str, Any]]:
+    """渲染「LLM」页专用的配置分组（等价于 `render_sections(LLM_SECTIONS, env)`）。
+
+    `webui/routes/llm.py` 复用此函数，避免把 LLM 分组定义复制两遍。
+    """
+    return render_sections(LLM_SECTIONS, env)
 
 
 @router.get("/config")
@@ -372,4 +398,89 @@ async def put_config(payload: dict = Body(...)) -> dict:
         "backup": str(backup) if backup else "",
         "restart_required": True,
         "message": "已写入 .config/main/.env，需重启 Bot 生效",
+    }
+
+
+@router.post("/config/reload")
+async def reload_config() -> dict:
+    """重新读取 `.config/main/.env` 并热重载可热更的配置项（无需重启）。"""
+    result = reload_settings()
+    logger.info(
+        "WebUI：配置热重载 "
+        f"changed={result.get('changed')} hot={result.get('hot')} restart={result.get('restart')}"
+    )
+    return {"ok": True, **result}
+
+
+def _build_reload_message(config: dict, plugins: dict) -> str:
+    """把配置 + 插件重载结果拼成一句中文摘要（各部分为空时优雅省略）。"""
+    parts: list[str] = []
+
+    config_msg = str(config.get("message") or "").strip()
+    parts.append(f"配置：{config_msg}" if config_msg else "配置：无变化")
+
+    reloaded = plugins.get("reloaded") or []
+    skipped = plugins.get("skipped") or []
+    failed = plugins.get("failed") or []
+
+    plugin_parts: list[str] = []
+    if reloaded:
+        plugin_parts.append(f"成功 {len(reloaded)} 个（{'、'.join(reloaded)}）")
+    if skipped:
+        plugin_parts.append(f"跳过 {len(skipped)} 个（受保护）")
+    if failed:
+        names = "、".join(item.get("name", "?") for item in failed)
+        plugin_parts.append(f"失败 {len(failed)} 个（{names}）")
+    if plugin_parts:
+        parts.append("插件重载：" + "，".join(plugin_parts))
+
+    return "；".join(parts)
+
+
+@router.post("/reload")
+async def reload_all() -> dict:
+    """一键重载：重读 `.env` 配置 + 热重载所有可重载插件（受保护插件跳过）。"""
+    # 延迟 import，避免与文件顶部的 import 产生循环依赖。
+    from src.core import registry, reload as reload_mod
+
+    # 1) 配置部分：同步读 .env 并热更（不能 await）。
+    config_result = reload_settings()
+
+    # 2) 插件部分：逐个尝试热重载，失败不中断整轮。
+    reloaded: list[str] = []
+    failed: list[dict[str, str]] = []
+    skipped: list[str] = []
+    for name in registry.names():
+        feature = registry.get(name)
+        if feature is None:
+            continue
+        if feature.protected:
+            # 受保护插件禁止热重载（与 `/plugins/{name}/reload` 行为一致）。
+            skipped.append(name)
+            continue
+        try:
+            await reload_mod.reload_plugin(name)
+            reloaded.append(name)
+        except reload_mod.ReloadError as exc:
+            failed.append({"name": name, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - 单个插件炸了不影响整轮
+            failed.append({"name": name, "error": str(exc)})
+
+    plugins_result = {
+        "reloaded": reloaded,
+        "failed": failed,
+        "skipped": skipped,
+    }
+    message = _build_reload_message(config_result, plugins_result)
+
+    logger.info(
+        "WebUI：一键重载 "
+        f"config.hot={config_result.get('hot')} config.restart={config_result.get('restart')} "
+        f"plugins.reloaded={reloaded} plugins.failed={failed} plugins.skipped={skipped}"
+    )
+    return {
+        "ok": True,
+        "config": config_result,
+        "plugins": plugins_result,
+        "message": message,
     }
