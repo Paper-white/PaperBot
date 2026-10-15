@@ -99,6 +99,8 @@ Copy-Item .env.example .config\main\.env
 | `LLM_CONTEXT_ROUNDS` | `10` | 上下文保留轮数（`0` = 不带历史） |
 | `LLM_MAX_FACTS` | `30` | 注入提示词的关键信息条数上限 |
 | `LLM_MEMORY_SCOPE_ISOLATION` | `true` | 记忆跨窗口隔离：群聊只注入「通用 + 本群」信息，不再看到私聊/别群内容；`false` = 退回旧的全量注入 |
+| `LLM_MEMORY_SLOTS_ENABLE` | `true` | 记忆注入分槽保底：通用画像/窗口事实分槽，各槽至少保底若干条，避免近期事实挤掉长期画像 |
+| `LLM_MAX_FACTS_STORED` | `200` | 单用户单 scope 的事实库内条数上限（超出按最旧 auto 淘汰，manual 永不淘汰） |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：
 > 记忆自动生成改由「定时总结调度器」负责（见下面 1.7 小节）。
@@ -113,8 +115,8 @@ Copy-Item .env.example .config\main\.env
 | `LLM_SUMMARY_PROVIDER` | 空 | 总结用服务商（留空 = 默认服务商） |
 | `LLM_SUMMARY_MODEL` | 空 | 总结用模型（留空 = 服务商首选；建议填便宜模型） |
 | `LLM_SUMMARY_MAX_MSGS` | `300` | 单次总结最多取多少条增量（超出只取最近，水位线直推） |
-| `LLM_COMPRESS_THRESHOLD` | `40` | 会话消息超过该数时把旧消息压进 `llm_session.summary` |
-| `LLM_GROUP_CONTEXT_MSGS` | `10` | 群聊回复时从聊天流水取最近多少条群消息 |
+| `LLM_COMPRESS_THRESHOLD` | `20` | 会话消息超过该数时把旧消息压进 `llm_session.summary`（**保留窗口 = 2×`LLM_CONTEXT_ROUNDS`**，与注入窗口对齐） |
+| `LLM_GROUP_CONTEXT_MSGS` | `10` | ⚠️ **已废弃**（死配置）：群聊注入条数实际由插件配置 `paperbot_chat.group_history` 控制 |
 
 详见 [`llm.md`](llm.md)。
 

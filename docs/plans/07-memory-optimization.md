@@ -47,7 +47,7 @@
 5. ~~**user-scope 压缩摘要"写了却从不注入"**~~ → **已修复（2026-10-15）**：user 分支已补读 `llm_session.summary`。
 6. ~~**群分支的「更早的对话摘要」是死代码**~~ → **已处置**：群上下文改走 `chat_message` 流水，该分支恒空但不影响功能。
 7. ~~**私聊内容可能经群聊泄露**~~ → **已修复（2026-10-15）**：事实按来源 scope 隔离，群聊只注入「通用 + 本群」，印象降级为私聊专属。
-8. **无引用校验/代码闸门**，幻觉事实可直接入库（**仍是最高价值待办**）。
+8. ~~**无引用校验/代码闸门**，幻觉事实可直接入库~~ → **已修复（2026-10-15 第二批）**：`memory_gate.py` 引用校验 + 四类拒绝。
 9. ~~两套提炼入口并存（`refresh_profile` 旧 vs `summarize_user` 新）~~ → **已清理**：`refresh_profile` 已删除。
 10. `message_count` 语义混用；`messages_since(limit=300)` 超量时水位线直推最新、中间消息永久跳过。
 11. ~~`summarize_user` 水位线恒 0~~ → **已修复（2026-10-15）**：`get_profile()` 补返回 `last_msg_id`。
@@ -114,14 +114,31 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - [x] 清理废弃 `refresh_profile`（连同 `PluginLLM.refresh_profile`）
 - [x] 迁移：`database._migrate_llm_fact_scope` 幂等重建表，旧表保留 `llm_user_fact_legacy`，存量事实归 `private`
 
+### 已落地（2026-10-15，第二批）
+- [x] **P0 事实抽取「代码闸门」**：`src/core/memory_gate.py` —— 引用校验（最长公共子串）+ 四类拒绝
+  （转述/角色扮演/临时态/未兑现），`_write_facts` 写入前过滤（只拦 auto）
+- [x] **P1 压缩窗口对齐**：保留窗口改 `2 × LLM_CONTEXT_ROUNDS`，消除「既不压缩也不注入」的中间消息
+- [x] **P1 facts 库内条数上限**：`LLM_MAX_FACTS_STORED`（默认 200）+ `_prune_facts`（只淘汰 auto）
+- [x] **P1 分槽保底注入**：`select_facts_by_slots` —— 通用画像/窗口事实两槽各保底 5 条，
+  预留 `_fact_score` 供未来衰减接入
+
 ### P0（低风险、高收益）
-- [ ] 事实抽取**代码闸门**：`summarize_user` 后置校验（转述/角色扮演/临时态/未兑现四类拒绝）→ **下一个 P0，收益最高**
+- [ ] ~~事实抽取代码闸门~~ → **已完成（第二批）**
 
 ### P1（结构性改进）
-- [ ] `llm_user_fact` 改造：受控 key 词表 + 单值改口版本链（`supersedes_id`）+ 库内条数上限
-- [ ] 分槽注入：保底槽 = 本群事实 / 通用事实 / 群共同记忆 / 近期记忆
-- [ ] 半衰期软衰减 + 复述加固：`scheduler.py` 新增每日衰减任务（只降权不删）
-- [ ] 压缩窗口与注入窗口对齐：`LLM_COMPRESS_THRESHOLD`(40) vs `LLM_CONTEXT_ROUNDS`(10→20 条) 语义割裂（21~40 条静默不可见）
+- [ ] `llm_user_fact` 改造：受控 key 词表 + 单值改口版本链（`supersedes_id`）
+- [ ] ~~分槽注入~~ → **已完成（第二批）**
+- [ ] ~~压缩窗口与注入窗口对齐~~ → **已完成（第二批）**
+- [ ] ~~facts 库内条数上限~~ → **已完成（第二批）**
+- [ ] **半衰期软衰减 + 复述加固**：设计已完成（见下方 §「衰减设计结论」），**判定为 P2 缓做**
+      —— 单机 bot 记忆量小、遗忘压力低，ROI 需长期运行才兑现；字段与 `_fact_score` 排序接口已铺好，随时可接
+
+### 衰减设计结论（oracle 评审，未实施）
+- 字段：`llm_user_fact` 加 `weight`（默认 1.0）/ `last_used_at`（可空）/ `access_count`（默认 0），均可被 `_add_missing_columns` 自动补列；
+- 公式：`score = weight × 0.5^(age_days/half_life)`，`manual` 不衰减、`global` 半衰期 60 天、`group/private` 30 天；
+- 强化：被注入即 `weight=min(1.0, weight+0.2)`、`last_used_at=now`、`access_count+1`（节流 6h）；
+- 时机：**注入时实时算**（不回写），不做每日批量任务；「只降权不删」（`weight` 恒 ≥0.05、行不 DELETE）；
+- 结论：**P2 缓做**；`_fact_score` 已预留在 `llm.py`，接入时无需改调用方。
 
 ### 已废弃（不再需要）
 - [x] ~~修复「群上下文压缩死代码」~~：群作用域改走 `chat_message` 流水，不再依赖群 `llm_session`；群摘要注入分支保留但当前恒空（无群会话），不影响功能

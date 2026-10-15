@@ -133,8 +133,12 @@ class Settings(BaseSettings):
     llm_impression_every: int = 10
     # 注入 prompt 的关键信息条数上限
     llm_max_facts: int = 30
+    # 单个用户在**单个 scope** 内的事实条数上限（超出按 updated_at 最旧优先淘汰）
+    llm_max_facts_stored: int = 200
     # 记忆跨窗口隔离：事实按来源（私聊/某群）过滤注入，群聊不再看到私聊/别群内容
     llm_memory_scope_isolation: bool = True
+    # 记忆注入「分槽保底」：通用画像 / 窗口事实 分槽，每槽至少保留若干条，避免近期事实挤掉长期画像
+    llm_memory_slots_enable: bool = True
 
     # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
     # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。
@@ -152,7 +156,8 @@ class Settings(BaseSettings):
     # 单次总结最多取多少条增量（超过则只取最近这些，水位线直推最新）
     llm_summary_max_msgs: int = 300
     # 会话未压缩消息达到该条数时，把旧消息压进 llm_session.summary
-    llm_compress_threshold: int = 40
+    # 触发压缩的会话消息条数；实际保留窗口 = 2×LLM_CONTEXT_ROUNDS（与注入窗口对齐）
+    llm_compress_threshold: int = 20
     # 群聊上下文注入时从 chat_message 取最近多少条群消息
     llm_group_context_msgs: int = 10
 

@@ -1747,8 +1747,67 @@ def _dedup_facts(facts: list[dict]) -> list[dict]:
     return list(seen.values())
 
 
+def _fact_score(f: dict) -> float:
+    """事实打分（用于分槽内/合流排序）。
+
+    v1 恒等于 weight（现无该字段时取默认 1.0）→ 等价于按 updated_at 排序；
+    未来接入半衰期衰减时只改这里，调用方不动。
+    """
+    try:
+        return float(f.get("weight") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _sort_facts(facts: list[dict]) -> list[dict]:
+    """按分数降序、updated_at 降序（同分时新者优先）排序。"""
+    return sorted(
+        facts,
+        key=lambda f: (_fact_score(f), f.get("updated_at") or ""),
+        reverse=True,
+    )
+
+
+def select_facts_by_slots(
+    facts: list[dict],
+    *,
+    scope: str,
+    max_facts: int,
+    floors: Optional[dict[str, int]] = None,
+) -> dict[str, list[dict]]:
+    """两槽制 + 每槽保底：S1=通用画像(scope_type==global)，S2=窗口事实(其余)。
+
+    - 每槽保底 `min(槽内条数, floor)` 条（默认 floor=5）；剩余预算按 `_fact_score`
+      从两槽剩余条目合流填充，直到用完 `max_facts`。
+    - `scope == "all"`（隔离关闭）→ 退回扁平 {"all": 前 max_facts 条}。
+    返回 {槽名: [事实...]}，键序稳定（global 在前）。
+    """
+    fl = {"global": 5, "window": 5} if floors is None else dict(floors)
+    if scope == "all":
+        return {"all": _sort_facts(facts)[: max(0, max_facts)]}
+
+    general = [f for f in facts if f.get("scope_type") == FACT_SCOPE_GLOBAL]
+    window = [f for f in facts if f.get("scope_type") != FACT_SCOPE_GLOBAL]
+    general = _sort_facts(general)
+    window = _sort_facts(window)
+
+    take_g = min(len(general), int(fl.get("global", 0)))
+    take_w = min(len(window), int(fl.get("window", 0)))
+    picked_g = general[:take_g]
+    picked_w = window[:take_w]
+
+    budget = max(0, int(max_facts) - len(picked_g) - len(picked_w))
+    rest = _sort_facts(general[take_g:] + window[take_w:])
+    for f in rest[:budget]:
+        if f.get("scope_type") == FACT_SCOPE_GLOBAL:
+            picked_g.append(f)
+        else:
+            picked_w.append(f)
+    return {"global": picked_g, "window": picked_w}
+
+
 def build_memory_block(
-    profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private"
+    profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private", slots: bool = True
 ) -> str:
     """把长期记忆拼成一段注入 system 的提示词（空白记忆返回空串）。
 
@@ -1759,6 +1818,9 @@ def build_memory_block(
     - `"group"`   → **不渲染印象**（印象降级为私聊专属），并声明「别窗口的信息一律不知道」；
     - `"private"` → 渲染印象 + facts，并声明「别泄漏 ta 在群里说过的话」；
     - `"all"`     → 关闭隔离时的中性说明（不含隔离边界）。
+
+    `slots=True`（且 `llm_memory_slots_enable` 开启、`scope` 非 "all"）时，facts 按
+    「通用画像 / 窗口事实」分槽渲染并各自保底，避免近期活跃窗口的事实挤掉长期稳定画像。
     """
     if not profile:
         return ""
@@ -1769,18 +1831,43 @@ def build_memory_block(
     if impression and scope != "group":
         lines.append(f"【你对 {who} 的印象】{impression}")
     facts = _dedup_facts(list(profile.get("facts") or []))
-    limit = settings.llm_max_facts if max_facts is None else max_facts
-    if limit and limit > 0:
-        facts = facts[:limit]
     facts = [f for f in facts if f.get("key")]
-    if facts:
-        lines.append(
-            "【已知关键信息】\n" + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in facts)
-        )
+    limit = settings.llm_max_facts if max_facts is None else max_facts
+    # 分槽保底：通用画像 / 窗口事实 分槽渲染，避免近期事实挤掉长期画像
+    if slots and settings.llm_memory_slots_enable and scope in ("group", "private"):
+        groups = select_facts_by_slots(facts, scope=scope, max_facts=limit)
+        general = groups.get("global") or []
+        window = groups.get("window") or []
+        if general:
+            lines.append(
+                "【已知关键信息（通用画像）】\n"
+                + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in general)
+            )
+        if window:
+            title = "【本群已知】" if scope == "group" else "【私聊已知】"
+            lines.append(
+                title
+                + "\n"
+                + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in window)
+            )
+    else:
+        # 关闭分槽 / 隔离关闭（scope="all"）：保持原单层渲染
+        if limit and limit > 0:
+            facts = facts[:limit]
+        if facts:
+            lines.append(
+                "【已知关键信息】\n" + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in facts)
+            )
     if not lines:
         return ""
     if scope == "group":
-        head = "【当前发言者在本群可见的信息（仅来自 ta 在本群的发言或通用画像）】"
+        # 带上归属（昵称 / QQ），与 system 里的身份锚呼应，让模型清楚这份记忆属于谁
+        who_label = (owner or "").strip()
+        head = (
+            f"【{who_label} 在本群可见的信息（仅来自 ta 在本群的发言或通用画像）】"
+            if who_label
+            else "【当前发言者在本群可见的信息（仅来自 ta 在本群的发言或通用画像）】"
+        )
         lead = (
             "严格边界：不要使用、也不要透露 ta 在私聊或其他群说过的话；"
             "只在别的窗口见过的信息一律当作不知道。"
@@ -1923,13 +2010,26 @@ async def _summary_cfg() -> ProviderConfig:
     return cfg
 
 
-async def _write_facts(uid: str, raw_facts, *, scope_type: str, scope_id: str) -> None:
-    """写入一批自动提炼的事实（auto 不覆盖同 scope 的 manual）。"""
-    if not isinstance(raw_facts, list):
+async def _write_facts(
+    uid: str, raw_facts, *, scope_type: str, scope_id: str, source_msgs: list[dict]
+) -> None:
+    """写入一批自动提炼的事实（auto 不覆盖同 scope 的 manual）。
+
+    写入前先过「代码闸门」（`memory_gate`）：对着本批原始消息做引用校验，
+    只放行有原文支撑、且未命中四类幻觉规则的事实，避免模型幻觉污染长期画像。
+    """
+    from src.core import memory_gate
+
+    kept, rejected = memory_gate.filter_facts(raw_facts, source_msgs)
+    if rejected:
+        logger.debug(
+            f"闸门拒绝了 {len(rejected)} 条事实：{[r.get('reject_reason') for r in rejected]}"
+        )
+    if not kept:
         return
     existing = await get_profile(uid, scope_type=scope_type, scope_id=scope_id)
     manual_keys = {f.get("key") for f in (existing.get("facts") or []) if f.get("source") == LLM_FACT_MANUAL}
-    for item in raw_facts:
+    for item in kept:
         if not isinstance(item, dict):
             continue
         key = str(item.get("key") or "").strip()
@@ -1937,6 +2037,41 @@ async def _write_facts(uid: str, raw_facts, *, scope_type: str, scope_id: str) -
         if not key or not value or key in manual_keys:
             continue
         await set_fact(uid, key, value, source=LLM_FACT_AUTO, scope_type=scope_type, scope_id=scope_id)
+    await _prune_facts(uid, scope_type=scope_type, scope_id=scope_id)
+
+
+async def _prune_facts(uid: str, *, scope_type: str, scope_id: str) -> int:
+    """把某 scope 下的 auto 事实裁到上限（只淘汰 auto，manual 永不淘汰）。"""
+    limit = int(settings.llm_max_facts_stored or 0)
+    if limit <= 0:
+        return 0
+    from sqlalchemy import delete
+
+    async with get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(LlmUserFact)
+                    .where(
+                        LlmUserFact.user_id == uid,
+                        LlmUserFact.scope_type == scope_type,
+                        LlmUserFact.scope_id == scope_id,
+                    )
+                    .order_by(LlmUserFact.updated_at.asc(), LlmUserFact.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # manual 先保留，只从 auto 里淘汰最旧的
+        autos = [r for r in rows if (r.source or "") != LLM_FACT_MANUAL]
+        overflow = len(autos) - limit
+        if overflow <= 0:
+            return 0
+        victims = [r.id for r in autos[:overflow]]
+        await session.execute(delete(LlmUserFact).where(LlmUserFact.id.in_(victims)))
+        await session.commit()
+    return len(victims)
 
 
 async def _summarize_private(uid: str, batch: list[dict], cfg, *, fact_scope: str = FACT_SCOPE_PRIVATE) -> None:
@@ -1949,7 +2084,7 @@ async def _summarize_private(uid: str, batch: list[dict], cfg, *, fact_scope: st
     data = _extract_json(res.text)
     impression = str(data.get("impression") or "").strip() or old
     await set_impression(uid, impression, count=len(batch))
-    await _write_facts(uid, data.get("facts"), scope_type=fact_scope, scope_id="")
+    await _write_facts(uid, data.get("facts"), scope_type=fact_scope, scope_id="", source_msgs=batch)
 
 
 async def _summarize_group_facts(uid: str, gid: str, batch: list[dict], cfg) -> None:
@@ -1960,7 +2095,7 @@ async def _summarize_group_facts(uid: str, gid: str, batch: list[dict], cfg) -> 
     )
     res = await client().complete(cfg, [{"role": "user", "content": prompt}], {"temperature": 0.2, "max_tokens": 700})
     data = _extract_json(res.text)
-    await _write_facts(uid, data.get("facts"), scope_type=FACT_SCOPE_GROUP, scope_id=gid)
+    await _write_facts(uid, data.get("facts"), scope_type=FACT_SCOPE_GROUP, scope_id=gid, source_msgs=batch)
 
 
 async def _advance_user_watermark(uid: str, msg_id: int) -> None:
@@ -2076,8 +2211,9 @@ _COMPRESS_PROMPT = """你是一个对话摘要助手。把下面这段对话压�
 async def compress_session(session_id: int) -> dict:
     """把某会话「超出保留窗口的旧消息」压进 `llm_session.summary`。
 
-    保留最近 `LLM_COMPRESS_THRESHOLD` 条原文，更早的交给模型压成摘要
-    并合并到已有 summary；返回 {"ok", "compressed", "kept"}。
+    保留窗口 = 注入窗口（`2 × LLM_CONTEXT_ROUNDS`）：`LLM_COMPRESS_THRESHOLD`
+    只决定「何时触发压缩」，保留条数按注入窗口算，避免出现「既不压缩也不注入」
+    的中间消息。返回 {"ok", "compressed", "kept"}。
     """
     try:
         cfg = await _summary_cfg()
@@ -2103,6 +2239,8 @@ async def compress_session(session_id: int) -> dict:
             threshold = int(settings.llm_compress_threshold or 0)
             if threshold <= 0 or total <= threshold:
                 return {"ok": True, "compressed": 0, "kept": total}
+            # 保留窗口与注入窗口对齐：注入取 2×rounds 条，压缩也保留这么多
+            keep = max(2 * int(settings.llm_context_rounds or 0), 1)
 
             # 取最旧的（需要压缩的部分）
             old_rows = (
@@ -2111,7 +2249,7 @@ async def compress_session(session_id: int) -> dict:
                         select(LlmMessage)
                         .where(LlmMessage.session_id == session_id)
                         .order_by(LlmMessage.id.asc())
-                        .limit(max(0, total - threshold))
+                        .limit(max(0, total - keep))
                     )
                 )
                 .scalars()
