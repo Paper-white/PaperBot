@@ -26,7 +26,7 @@
 | `.env` 兜底的名字 | 虚拟服务商名 `env` | 前端要能在列表里显示「当前在用 .env」，但它不是 DB 记录（不能删/改） |
 | 人设存储 | DB 表 `llm_preset`，正文即 system_prompt | 便于 WebUI 增删改 + 导入导出；内置的从 `src/core/presets/*.md` 启动导入 |
 | 上下文作用域 | `scope_type`（`user` / `group`）× `scope_id` × `plugin_name` | 私聊记忆与群聊记忆分开；`plugin_name` 让不同插件默认不共享会话 |
-| 记忆提炼 | 每 N 条用户消息触发一次（`LLM_IMPRESSION_EVERY`） | 省 token：不是每轮都提炼 |
+| 记忆提炼 | 已废弃，改为 scheduler 定时总结（`LLM_SUMMARY_INTERVAL`） | 省 token：不是每轮都提炼 |
 | 记忆覆盖 | `manual` 不被自动提炼覆盖 | 人工写的信息不该被模型冲掉 |
 | 密钥回显 | 掩码 `********` / `••••••••` | 前端不出现明文；提交掩码 = 不改动 |
 | 客户端 | `openai` SDK（可换实现） | 兼容面最广；自检里用假 client 打本地假 OpenAI 服务 |
@@ -39,9 +39,9 @@
 - [x] 记忆：`get_profile` / `set_impression` / `set_fact` / `delete_fact` / `clear_profile` / `build_memory_block`
 - [x] 核心调用：`ask`（单问）/ `chat`（消息列表）/ `stream`（流式）
 - [x] 门面 `PluginLLM`（`feature.llm.ask(...)`），统一异常 `LLMError`
-- [x] WebUI 第 8 页「LLM 与记忆」（5 张卡片 + 试聊）
+- [x] WebUI「LLM 与记忆」页（服务商 / 试聊 / 人设 / 会话 / 用户记忆 / 群记忆 等卡片）
 - [x] 演示插件 `paperbot_chat`（`%ai` 系列命令）
-- [x] 自检 `_tests/llm_check.py`（`pixi run check-llm`，86 项，含真实 SDK 链路）
+- [x] 自检 `_tests/llm_check.py`（`pixi run check-llm`，含真实 SDK 链路）
 
 ## 人设覆盖规则（容易忘）
 

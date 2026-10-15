@@ -3,7 +3,7 @@
 - 状态：已完成
 - 开始：2026-09-30
 - 相关文件：`src/core/{feature,hooks,version,reload,logger}.py`、`scripts/new_plugin.py`、`docs/plugin-dev.md`
-- 相关文档：[`../plugin-dev.md`](../plugin-dev.md)（面向插件作者的规范，长期维护）
+- 相关文档：[`../plugin-dev.md`](../plugin-dev.md)（插件开发指南）、[`../plugin-api.md`](../plugin-api.md)（API 参考）
 
 ## 目标
 
@@ -42,11 +42,11 @@
 - [x] P2 热重载（受保护插件 409；重载前 `on_unload`、重载后 `on_load`，配置保留）
 - [x] P2 脚手架生成器（不覆盖已存在文件，除非 `--force`）
 - [x] P3 统一 logger
-- [x] `docs/plugin-dev.md` 插件开发协议文档
+- [x] `docs/plugin-dev.md` 插件开发指南文档（API 细节另见 `plugin-api.md`）
 - [x] 真机复测：配置读写（含中文 UTF-8）/ 热重载 200 / 受保护 409
 
 ## 遗留 / 后续
 
 - 早期自检脚本（`plugindev_check.py` 96 项等）放在 `%TEMP%\opencode\`，**已被系统清理**；
   改动这块时建议临时重写一个同样的自检跑一遍（长期入口只有 `_tests/config_check.py` 与 `_tests/llm_check.py`）
-- `docs/plugin-dev.md` 与代码同步维护：**改框架对外接口时顺手更新它**
+- `docs/plugin-dev.md` / `docs/plugin-api.md` 与代码同步维护：**改框架对外接口时顺手更新它**

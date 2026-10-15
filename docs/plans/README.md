@@ -8,7 +8,7 @@
 | 位置 | 放什么 | 例子 |
 |---|---|---|
 | `docs/plans/`（**本目录**） | 一个功能的**规划 / 决策 / 落地记录 / 遗留问题** | 本目录下的各文件 |
-| `docs/` | 面向使用者的**规范与指南**（长期有效、成体系），入口是 [`../index.md`](../index.md) | `architecture.md`、`configuration.md`、`commands.md`、`deploy.md`、`api.md`、`development.md`、`plugin-dev.md`、`llm.md` |
+| `docs/` | 面向使用者的**规范与指南**（长期有效、成体系），入口是 [`../index.md`](../index.md) | `architecture.md`、`configuration.md`、`commands.md`、`deploy.md`、`api.md`、`development.md`、`plugin-dev.md`、`plugin-api.md`、`llm.md`、`llm-api.md` |
 | `README.md` | 面向项目外的**公开介绍**（技术栈 / 部署 / 目录索引 / 功能 / 致谢） | 根目录 |
 | `AGENTS.md` | 交接给新会话的**开发知识**（含本地环境信息）→ **不提交** | §2 本地环境、§3 硬核易错点 |
 
@@ -53,3 +53,5 @@
 | [`03-config-consolidation.md`](03-config-consolidation.md) | 配置集中化（`.config/` + 插件配置改 JSON） | 已完成 |
 | [`04-backlog.md`](04-backlog.md) | 待办与想法池（零散的、还没立成计划的） | 进行中 |
 | [`05-version-control.md`](05-version-control.md) | 框架版本控制（WebUI 一键拉取云端版本 + 重启） | 已完成 |
+| [`06-webui-config-and-mute.md`](06-webui-config-and-mute.md) | WebUI 配置修复 + 配置热重载 + 捂嘴命令 | 进行中 |
+| [`07-memory-optimization.md`](07-memory-optimization.md) | 长期记忆与召回优化（对标两 AstrBot 记忆插件的调研 + 规划） | 规划中 |

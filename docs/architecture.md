@@ -31,12 +31,67 @@
    └───────────────┘    └───────────────────┘   └───────────────────┘
 ```
 
-## 2. 模块职责
+## 2. 源码结构与模块职责
+
+### 2.1 源码文件树
+
+> 本文件是**源码目录结构**的唯一维护处；其它文档如需概览请引用此处。
+
+```
+PaperBot/
+├── bot.py                      # 启动入口
+├── pyproject.toml              # pixi 工作区 + 依赖 + 任务（bot / new-plugin / check-*）
+├── .env.example                # 配置模板（复制到 .config/main/.env）
+├── src/
+│   ├── config.py               # 项目配置（pydantic-settings，读 .config/main/.env）
+│   └── core/                   # 自研框架核心
+│       ├── bootstrap.py        # 启动 / 关闭流程
+│       ├── chatlog.py          # 聊天记录原始流水层（全局钩子写 chat_message）
+│       ├── cmdperm.py          # 命令权限
+│       ├── connlog.py          # 连接日志降噪（协议端重连报错可读化 + 节流）
+│       ├── database.py         # 共享数据库（engine + get_session）
+│       ├── feature.py          # 插件基类 Feature
+│       ├── gate.py             # 三级门控
+│       ├── guard.py            # 消息输出守卫
+│       ├── hooks.py            # 生命周期钩子
+│       ├── llm.py              # 统一 LLM 服务
+│       ├── loader.py           # 插件加载器
+│       ├── logger.py           # 统一日志出口
+│       ├── logging.py          # 日志文件输出
+│       ├── models.py           # 共享 ORM 表定义
+│       ├── permission.py       # 四级权限
+│       ├── pluginconf.py       # 插件配置项（.config/<插件名>/config.json 读写）
+│       ├── registry.py         # 内存插件注册表
+│       ├── reload.py           # 插件热重载
+│       ├── render.py           # 渲染核心（文本 / Markdown → PNG）
+│       ├── scheduler.py        # 后台定时任务（记忆总结 + 上下文压缩）
+│       ├── service.py          # 业务逻辑（QQ 命令与 WebUI 共用）
+│       ├── textutil.py         # 共享小工具（human_size / fmt_dt / now_text…）
+│       ├── vcs.py              # 框架版本控制
+│       ├── version.py          # 框架版本 + requires 校验
+│       ├── presets/            # 内置人设（*.md）
+│       └── templates/          # 渲染模板
+├── plugins/                    # 功能插件（一插件一文件夹）
+│   ├── paperbot_console/       # 总控插件（启停 / 权限 / 黑名单）
+│   ├── paperbot_chat/          # 人设对话插件（LLM + 记忆）
+│   └── paperbot_ping/          # 在线状态测试插件
+├── webui/                      # WebUI 管理后台
+│   ├── api.py                  # 挂载入口（/api + 页面 + 静态资源）
+│   ├── routes/                 # 各页面接口
+│   └── static/                 # 零构建前端
+├── scripts/                    # 开发工具（插件脚手架）
+├── _tests/                     # 自检脚本（check-config / check-llm / check-vcs）
+├── assets/                     # 必要素材（被代码引用的图片等）
+├── data/                       # 运行时数据库（不提交）
+└── logs/                       # 运行日志（不提交）
+```
+
+### 2.2 模块职责
 
 | 模块 | 职责 |
 |---|---|
 | `src/config.py` | 项目配置（pydantic-settings，读 `.config/main/.env`，根 `.env` 兜底）+ `config_dir()` / `MAIN_ENV_PATH` |
-| `src/core/models.py` | 共享 ORM `Base` + 框架公共表 + 6 张 `llm_*` 表 |
+| `src/core/models.py` | 共享 ORM `Base` + 框架公共表（插件 / 门控 / 命令 / 权限）+ 聊天流水表 + **7 张 `llm_*` 表** |
 | `src/core/database.py` | 全局单例 async engine + `get_session()`；建表 + 自动补列 |
 | `src/core/registry.py` | 内存插件注册表 |
 | `src/core/feature.py` | **功能插件基类 `Feature`**（命令 / 配置项 / 钩子 / logger / `config_dir` / `.llm` 门面） |
@@ -115,27 +170,42 @@
 ## 6. WebUI 管理后台
 
 - 后端：内嵌 **FastAPI**（复用 NoneBot 的 fastapi driver app），挂载在 `/api`；页面与静态资源由 `webui/api.py` 提供
-- 前端：**零构建单页**（`webui/static/index.html` + `assets/app.js` + `assets/style.css`），hash 路由，九个菜单：
-  **状态 / 系统配置 / 黑白名单 / 插件管理 / LLM 与记忆 / 数据库管理 / 命令管理 / 日志 / 设置**
+- 前端：**零构建单页**（`webui/static/index.html` + `assets/app.js` + `assets/style.css`），hash 路由
+- 九个菜单页与接口清单的**唯一信息源是 [`api.md`](api.md)**（此处不再重复，避免两处漂移）
 - API 前缀通过服务端替换 `%WEBUI_PREFIX%` 占位符注入前端（页面用 `window.__WEBUI_PREFIX__` 读取）
 - 除 `GET /` 外，9 个页面名也各自注册成 `GET /<name>`（直接敲 `/status`、`/llm`、`/logs` 也能用）
 - 交互组件（全站共用）：通用浮窗 `openModal/closeModal`、chips 列表输入、可搜索长下拉、
   群号 `datalist`、`mutate()` 写操作助手、页面级定时器 `addPageTimer/clearPageTimers`
-- 接口清单见 [`api.md`](api.md)
 
 ## 7. 数据表
 
+> 本节是**数据表清单与字段**的唯一信息源，与 `src/core/models.py` 保持一致。
+
+框架公共表（插件 / 门控 / 命令 / 权限）：
+
 | 表 | 用途 | 关键字段 / 唯一键 |
 |---|---|---|
-| `plugin_info` | 插件元信息（同步自注册表） | `name` / `display_name` / `version` / `author` / `repo` / `requires` / `protected` |
+| `plugin_info` | 插件元信息（同步自注册表） | `name` / `display_name` / `description` / `version` / `author` / `repo` / `requires` / `default_enabled` / `protected` |
 | `plugin_rule` | 三级门控规则 | (`plugin_name`, `scope_type`, `scope_id`) |
 | `command_rule` | 命令权限覆盖 | (`plugin_name`, `command_name`) |
 | `user_permission` | 权限授权 / 黑名单 | (`user_id`, `scope_type`, `scope_id`) |
-| `llm_provider` | LLM 服务商 | `name`；`is_default` |
+
+聊天流水表（原始事实层，见 `src/core/chatlog.py`）：
+
+| 表 | 用途 | 关键字段 |
+|---|---|---|
+| `chat_message` | 群 / 私聊消息原始流水（记忆总结与群聊上下文都从这里取素材） | `message_type`（group/private）/ `group_id` / `user_id` / `nickname` / `content` / `message_id`（去重）/ `is_bot` / `created_at` |
+
+LLM 相关表（**7 张 `llm_*`**，见 `src/core/llm.py`）：
+
+| 表 | 用途 | 关键字段 / 唯一键 |
+|---|---|---|
+| `llm_provider` | LLM 服务商 | `name`；`is_default`；`models` / `priority`（多模型优先级） |
 | `llm_preset` | 人设 | `name`；`source` = builtin / import / manual |
-| `llm_session` | 会话 | (`scope_type`, `scope_id`, `plugin_name`) |
+| `llm_session` | 会话 | (`scope_type`, `scope_id`, `plugin_name`)；`summary`（压缩摘要） |
 | `llm_message` | 会话消息 | `session_id` |
-| `llm_user_profile` | 用户印象 | `user_id` |
+| `llm_user_profile` | 用户印象 | `user_id`；`last_msg_id`（个人记忆水位线） |
+| `llm_group_profile` | 群记忆 | `group_id`；`memory`；`last_msg_id`（群记忆水位线） |
 | `llm_user_fact` | 关键信息 | (`user_id`, `fact_key`)；`source` = auto / manual |
 
 插件配置**不在数据库里**（已迁到 `.config/<插件名>/config.json`，见 [`configuration.md`](configuration.md)）。

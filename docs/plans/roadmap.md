@@ -16,6 +16,7 @@
 | **Phase 2.5** | 配置集中化（`.config/` + 插件配置改 JSON）→ [`03-config-consolidation.md`](03-config-consolidation.md) | ✅ 已完成 |
 | **Phase 2.6** | 框架版本控制（WebUI 一键拉取云端版本 + 重启）→ [`05-version-control.md`](05-version-control.md) | ✅ 已完成 |
 | **Phase 3** | WebUI 打磨（第一轮已完成：自动刷新 / 浮窗 / 输入控件 / 命令大表 / 日志页；后续按需继续） | 🚧 进行中 |
+| **Phase 3（06 号）** | WebUI 配置修复 + 配置热重载 + 捂嘴命令 → [`06-webui-config-and-mute.md`](06-webui-config-and-mute.md) | 🚧 进行中 |
 
 ## Phase 1 已完成清单（存档）
 
@@ -40,6 +41,8 @@
    `chat_message` / `llm_user_profile` / `llm_group_profile` / `llm_session.summary`
 2. **WebUI 打磨**：前端交互细节、更多 API、按需补设置项
 3. **AI 工具调用（function calling）**：让 AI 自己查群聊上下文 / 用户画像（想法池）
+4. **长期记忆与召回优化**：对标两 AstrBot 记忆插件（代码闸门 / 分槽保底 / 软衰减 / 向量检索等）
+   → [`07-memory-optimization.md`](07-memory-optimization.md)（规划中）
 
 ## 维护约定
 

@@ -1,8 +1,11 @@
 # WebUI 与 REST API
 
+> 📍 本文件是 **WebUI 页面清单**与 **REST 接口一览**的唯一信息源，与 `webui/api.py`
+> （菜单在 `webui/static/assets/app.js` 的 `MENU`）保持一致；其它文档如需页面/接口请引用此处。
+
 浏览器打开 **`http://127.0.0.1:6188/`** 即是管理后台（内嵌 FastAPI + 零构建单页前端）。
 
-- 左侧九个菜单：**状态 / 系统配置 / 黑白名单 / 插件管理 / LLM 与记忆 / 数据库管理 / 命令管理 / 日志 / 设置**
+- 左侧九个菜单（按菜单顺序）：**状态 / 系统配置 / 黑白名单 / 插件管理 / LLM 与记忆 / 数据库管理 / 命令管理 / 日志 / 设置**
 - 页面路由：除 `GET /` 外，也可直接访问 `/<页面名>`（如 `/status`、`/llm`、`/logs`、`/settings`）
 - API 前缀默认 `/api`（`WEBUI_PREFIX` 可改）；接口一览如下
 
@@ -24,8 +27,11 @@ GET    /api/health                                       健康检查（不鉴�
 GET    /api/status                                       运行状态 / 在线时长 / 连接 / 统计 / 守卫 / 存储
 
 # ---- 配置 ----
-GET    /api/config                                       配置分组（适配器 + 5 个 section，密钥脱敏）
+GET    /api/config                                       配置分组（适配器 + section，密钥脱敏；database/render 已隐藏）
 PUT    /api/config                                       写回 .config/main/.env（留空或占位符=不改，自动 .env.bak）
+POST   /api/config/reload                                重读 .env：可热更项立即生效，返回 {changed,hot,restart,message}
+POST   /api/reload                                       一键重载：重读 .env + 重载所有插件
+                                                         → {config:{...}, plugins:{reloaded,failed,skipped}, message}
 
 # ---- 插件 ----
 GET    /api/plugins                                      插件总览（含 global_enabled）
@@ -62,6 +68,8 @@ PUT    /api/llm/users/{uid}/impression                   手写印象
 PUT    /api/llm/users/{uid}/facts                        手加 / 更新关键信息（人工来源）
 DELETE /api/llm/users/{uid}/facts?key=                   删单条（key 省略 = 全删）
 DELETE /api/llm/users/{uid}                              清空该用户长期记忆
+GET    /api/llm/groups[?limit=]                          有群记忆的群列表（`llm_group_profile`）
+PUT    /api/llm/groups/{gid}/memory                      人工改写群记忆
 POST   /api/llm/chat                                     无状态试聊 {prompt, preset?, provider?}
 
 # ---- 权限 / 群 ----
@@ -97,7 +105,10 @@ POST   /api/version/restart                              重启 Bot（spawn 自�
 
 ## 行为约定
 
-- **生效时机**：`.config/main/.env`（`PUT /api/config`、改 token）需**重启**；插件开关 / 规则 / 命令权限 /
+- **生效时机**：`.config/main/.env` 的**可热更项**（`LLM_*` / `RENDER_*` / 白名单 / `SUPERUSERS` /
+  `CHATLOG_ENABLE` 等）可用 `POST /api/config/reload`（系统配置页「热重载配置」按钮 / QQ `%reload`）
+  **即时生效**；**需重启项**（`HOST`/`PORT`/`DRIVER`/`COMMAND_START`/`ONEBOT_*`/`WEBUI_ENABLE`/
+  `WEBUI_PREFIX`/`DATABASE_URL`/`LOG_*`）必须重启（reload 会列出）；插件开关 / 规则 / 命令权限 /
   插件配置 / LLM 服务商与人设 **即时生效**
 - **写回安全**：`.config/main/.env` 按行替换、保留注释与顺序，并先备份同目录 `.env.bak`；
   与现有值等价则**完全不写盘**（连备份都不产生）

@@ -69,12 +69,12 @@ curl http://127.0.0.1:6188/api/health
 
 ## 3. 常驻运行
 
-### Windows（任务计划 / 服务）
+### 3.1 Windows（任务计划 / 服务）
 
 - 简单做法：写个 `.bat` 用任务计划程序在开机时运行，或放进 `shell:startup`
 - 想当服务跑可以用 [NSSM](https://nssm.cc/)：`nssm install PaperBot .\.pixi\envs\default\python.exe bot.py`
 
-### Linux（systemd 示例）
+### 3.2 Linux（systemd 示例）
 
 ```ini
 [Unit]
@@ -97,7 +97,7 @@ WantedBy=multi-user.target
 > ⚠️ `WorkingDirectory` 必须是项目根目录（相对路径依赖）。
 > 首次部署记得跑一次 `pixi install` 和（如需出图）`playwright install chromium`。
 
-### 3.1 守护服务（推荐，配合一键更新）
+### 3.3 守护服务（推荐，配合一键更新）
 
 把 Bot 注册成系统服务并设置**崩溃自动拉起**，既能让它常驻，也能配合 WebUI「一键更新」：
 
@@ -127,7 +127,7 @@ nssm start PaperBot
 > 会由一个 detached 小助手在 3 秒后拉起新进程，**开箱即用**；区别是它只在主动重启时生效，
 > 不会像守护进程那样在崩溃后自愈。
 
-## 3.5 更新部署（WebUI 一键拉取云端版本）
+### 3.4 更新部署（WebUI 一键拉取云端版本）
 
 正式环境更新流程：
 
@@ -143,7 +143,7 @@ nssm start PaperBot
 - **只拉不推**，只追 `origin/main`
 - 更新前**工作区必须是干净的**（有未提交改动会被拒绝）——生产环境请勿手改代码
 - `.config/`（含密钥）、`data/`（数据库）、`logs/` 都已 gitignore，更新**不会碰**
-- 相关配置见 [`configuration.md`](configuration.md#17-版本控制一键拉取云端版本)
+- 相关配置见 [`configuration.md`](configuration.md#18-版本控制一键拉取云端版本)
 
 ## 4. 反向代理 / 对外暴露
 
@@ -168,7 +168,7 @@ location / {
 
 | 内容 | 位置 | 说明 |
 |---|---|---|
-| 数据库 | `data/paperbot.db` | 所有插件共享；**含插件配置？不，配置在 `.config/`** |
+| 数据库 | `data/paperbot.db` | 所有插件共享；**插件配置不在库里**（见下行） |
 | 配置 | `.config/` | 框架 `.config/main/.env` + 各插件 `.config/<插件名>/config.json`（**含密钥**） |
 | 日志 | `logs/` | 每次运行一个文件，按 `LOG_KEEP_DAYS` 自动清理 |
 | 人设 | 数据库 `llm_preset` + `src/core/presets/*.md`（内置） | 可从 WebUI 导出为 `.md` |

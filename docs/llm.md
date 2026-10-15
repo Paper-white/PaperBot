@@ -1,24 +1,15 @@
-# PaperBot LLM 服务使用与开发指南
+# PaperBot LLM 使用与运维指南
 
-> 本文写给两类人：**运维/使用者**（想配好模型、调教人设、管记忆）与**插件作者**（想在插件里调大模型）。
-> 框架侧实现见 `src/core/llm.py`，WebUI 接口见 `webui/routes/llm.py`。
+> 本文写给**运维 / 使用者**：想配好模型、调教人设、管好记忆、看明白 WebUI 上的每一块。
+> 想**在插件里写代码调大模型**？请移步开发者参考 [`llm-api.md`](llm-api.md)（`feature.llm` 接口 / 参数 / 异常 / 数据表 / REST）。
 > 一句话：**任何 OpenAI 兼容服务都能接**，插件只要一行 `await feature.llm.ask("你好")`。
 
 ---
 
 ## 0. TL;DR
 
-```python
-# 插件里最小用法（无需自己读配置、自己建 client）
-reply = await feature.llm.ask("你好呀")                      # 一句话
-reply = await feature.llm.ask("你好呀", scope="user", scope_id=str(event.user_id))  # 带上下文 + 长期记忆
-async for chunk in feature.llm.stream("写首诗"):              # 流式（全局关了也安全，退化成一片）
-    if chunk.done:
-        await matcher.finish(chunk.text)
-```
-
 ```powershell
-# 起服务后用 WebUI「LLM 与记忆」页管理服务商 / 人设 / 会话 / 用户记忆；或直接打 API：
+# 打开 WebUI →「LLM 与记忆」页，配服务商 / 人设 / 看会话与记忆；或直接打 API：
 curl http://127.0.0.1:6188/api/llm/status
 ```
 
@@ -31,6 +22,9 @@ curl http://127.0.0.1:6188/api/llm/status
 ---
 
 ## 1. 配置总览
+
+> 📌 **`.env` 全部键的唯一出处是** [`configuration.md`](configuration.md)（第 1 章）。
+> 本文**不再复制整张键表**，只讲 LLM 相关的配置位置与生效方式。
 
 ### 1.1 两种配置位置
 
@@ -45,29 +39,22 @@ curl http://127.0.0.1:6188/api/llm/status
 显式传的 provider 名 → DB 里 is_default=1 的服务商 → .env 兜底（"env"）
 ```
 
-### 1.2 `.env` 全部 LLM 键
+### 1.2 LLM 相关的 `.env` 键
 
 > 📁 这里的 `.env` 指 **`.config/main/.env`**（整个 `.config/` 已 gitignore）。
 > 根目录若还留着老的 `.env`，会被当作低优先级兜底读取（`.config/main/.env` 优先）。
 
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `LLM_ENABLE` | `true` | 总开关，关掉后所有插件调用都会抛可读错误 |
-| `LLM_BASE_URL` | 空 | 兜底服务商地址（OpenAI 兼容，通常以 `/v1` 结尾） |
-| `LLM_API_KEY` | 空 | 兜底密钥（勿提交） |
-| `LLM_MODEL` | `gpt-4o-mini` | 兜底模型名 |
-| `LLM_TIMEOUT` | `60` | 请求超时（秒） |
-| `LLM_PROXY` | 空 | 代理，本机 Clash 例 `http://127.0.0.1:2080`；留空直连 |
-| `LLM_TEMPERATURE` | `0.8` | 采样温度 |
-| `LLM_MAX_TOKENS` | `0` | `0` = 不传，交给服务端默认 |
-| `LLM_DEFAULT_PRESET` | 空 | 默认人设名（未指定时用它），内置示例 `paper_white` |
-| `LLM_STREAM_ENABLE` | `false` | 流式总开关（插件显式传 `use_stream` 时以插件为准） |
-| `LLM_MEMORY_ENABLE` | `true` | 是否注入「用户印象 + 关键信息 + 群记忆」 |
-| `LLM_CONTEXT_ROUNDS` | `10` | 上下文轮数（1 轮 = 用户 + 助手） |
-| `LLM_MAX_FACTS` | `30` | 最多往提示词里塞几条关键信息 |
+LLM 相关的键分三组，**完整定义与默认值一律看** [`configuration.md`](configuration.md)：
 
-> ⚠️ `.env` 里的 LLM 相关键（含 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` 等）也能在 WebUI
-> **「系统配置」页 → LLM 兜底与行为** 分组里改，改完需重启。
+| 分组 | 含哪些键 | 去哪看 |
+|---|---|---|
+| **LLM 兜底与运行参数** | `LLM_ENABLE` / `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_TIMEOUT` / `LLM_PROXY` / `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_DEFAULT_PRESET` / `LLM_STREAM_ENABLE` / `LLM_MEMORY_ENABLE` / `LLM_CONTEXT_ROUNDS` / `LLM_MAX_FACTS` | `configuration.md` |
+| **聊天记录** | `CHATLOG_ENABLE` | `configuration.md` |
+| **定时总结与压缩** | `LLM_SUMMARY_ENABLE` / `LLM_SUMMARY_INTERVAL` / `LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL` / `LLM_SUMMARY_MAX_MSGS` / `LLM_COMPRESS_THRESHOLD` / `LLM_GROUP_CONTEXT_MSGS` | `configuration.md` |
+
+> ⚠️ `.env` 里的 LLM 相关键也能在 WebUI **「LLM 与记忆」页 → 「运行参数」分组**里改；
+> 这类键属**可热更**，改完点「系统配置」页的 **「热重载配置」**（或 QQ `%reload`）即生效，无需重启。
+> ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留），记忆自动生成改由**定时总结**负责（见第 4 章）。
 
 ### 1.3 首次配置三选一
 
@@ -86,136 +73,87 @@ curl http://127.0.0.1:6188/api/llm/status
 
 ## 2. WebUI「LLM 与记忆」页
 
-入口：`http://127.0.0.1:6188/llm`（左侧菜单「LLM 与记忆」）。页面分五块：
+入口：`http://127.0.0.1:6188/llm`（左侧菜单「LLM 与记忆」）。
+页面主体由**六块**卡片组成：**服务商 / 试聊 / 人设 / 会话 / 用户长期记忆 / 群记忆**，另有顶部**总览卡**与底部**「运行参数」分组**。
 
 ### 2.1 总览（顶部卡片）
 
-`LLM 总开关 / 是否可用 / 流式 / 记忆 / 上下文轮数 / 提炼间隔 / 默认人设 / 兜底服务商 / 服务商数 / 人设数 / 会话数 / 用户数`。
-**「是否可用」为否**时，说明既没有启用的 DB 服务商，`.env` 也没填 —— 页面会给出提示。
+- 第一组：`LLM（已启用/禁用 · 调用可用） / 当前服务商 / 人设 / 会话 / 用户记忆 / 群记忆`；
+- 第二组：`流式 / 上下文轮数 / 定时总结间隔（LLM_SUMMARY_INTERVAL）`。
+- 当 `LLM` 卡片的副文案显示「未配置密钥 / 地址」时，说明既没有启用的 DB 服务商，`.env` 也没填 —— 页面会给出提示。
 
 ### 2.2 服务商（Providers）
 
-表格列：名称 / 地址 / 模型 / 密钥（`********` 或「未设置」）/ 温度 / 超时 / 默认 / 启用 / 来源 / 操作。
+表格列：名称 / 状态 / API 地址 / 首选模型 / 模型数 / 密钥（`********` 或「未设置」）/ 操作。
 
-- **新增/编辑**：右侧表单填 `名称`（必填，字母数字`_-.`，最长 64）/ `地址` / `密钥` / `模型` / `温度` / `超时` / `额外参数(JSON)`。
+- **新增/编辑**：填 `名称` / `API 地址` / `API Key` / `温度` / `设为默认`。
 - **密钥字段**：留空 = 不改动已有密钥；显示 `********` 时原样提交也不改动；想清空请用「删除服务商」或直接填新 key。
 - **设为默认**：同表唯一（框架自动保证只有一个 `is_default=1`）。
-- **测试**：发一条 `你好` 给该服务商，返回耗时 / 模型 / 用量 —— 排查「key 对不对、地址通不通」的最快手段。
+- **测试**：发一条 `ping` 给该服务商，返回耗时 / 模型 / 用量 —— 排查「key 对不对、地址通不通」的最快手段。
 - **`env` 行**：来源列显示「兜底」，只能测试，不能改删（接口返回 400）。
 
 ### 2.3 试聊（Chat）
 
-选一个服务商（可留空走默认）+ 选一个人设（可留空走默认）+ 输入内容 → 回车，页面展示回复与耗时。
+选一个人设（可留空走默认）+ 输入内容 → 发送，页面展示回复。
 这是**无状态**试聊（不带上下文、不落库），适合验证人设文风与模型是否听话。
 
 ### 2.4 人设（Presets）
 
-表格列：名称 / 显示名 / 来源（内置 / 导入 / 人工）/ 启用 / 正文长度 / 更新时间 / 操作。
+表格列：名字 / 显示名 / 来源（内置 / 导入 / 人工）/ 状态 / 提示词字数 / 更新时间 / 操作。
 
-- **新建/编辑**：显示名、描述、`system_prompt`（正文）、`params`（温度/最大 tokens 等，JSON）。
+- **新建/编辑**：名字（唯一键）、显示名、简介、状态、`系统提示词（正文）`。
   通过 WebUI 保存后来源自动变成**「人工」**，之后**再导入同名文件不会覆盖它**（要覆盖得勾选 `force`）。
-- **导入**：粘贴人设文本（Markdown + front-matter 或 JSON），可勾选「覆盖同名（force）」。
+- **导入**：粘贴人设文本（Markdown + front-matter 或 JSON），可勾选「同名已存在 → 强制覆盖」。
 - **导出**：下载 `.md` 文件（可直接当模板改）。
 - **删除**：内置人设删掉后，下次重启会被重新导入。
 
+文件格式与覆盖规则见本文第 3 章。
+
 ### 2.5 会话（Sessions）
 
-列出「作用域 + 谁 + 哪个插件 + 人设 + 服务商 + 消息数 + 更新时间」：
+列出「作用域 + ID + 插件 + 人设 + 服务商 + 消息数 + 更新时间」：
 
-- 能看每条会话的**最近消息**（点「查看消息」）；
-- 能给某条会话**换人设 / 换服务商**（清空则回落默认；人设或服务商不存在 → 400）；
-- 能**删除单条**或**按作用域批量清空**（如清掉某个群的全部上下文）。
+- 能看每条会话的**最近消息**（点「消息」）；
+- 能**换人设 / 换服务商**（点「换人设」；清空则回落默认，人设或服务商不存在 → 400）；
+- 能**清空单条**（连带消息，长期记忆不受影响）。
 
-### 2.6 用户记忆（Users）
+> 💡 会话只对**个人作用域**（`scope="user"`）存在；群聊不建会话（原因见 4.1）。
 
-列出「用户 / 印象 / 关键信息条数 / 消息数 / 印象更新时间」：
+### 2.6 用户长期记忆（Users）
+
+列出「用户 / 印象 / 关键信息条数 / 消息数 / 更新时间」：
 
 - 能看某个用户的**印象 + 全部关键信息**；
-- 能**手写印象**、**手加/删除关键信息**（人工记录不会被自动提炼覆盖）；
+- 能**手写印象**、**手加/删除关键信息**（人工记录不会被定时总结覆盖）；
 - 能**清空某个用户的全部长期记忆**（印象 + 关键信息）。
 
+### 2.7 群记忆（Groups）
+
+列出「群 / 共同记忆 / 累计消息 / 更新时间」：
+
+- 群记忆由后台**定时总结**从群聊流水增量生成（共同话题 / 群梗 / 正在聊的事）；
+- 可人工改写某群的群记忆；
+- 原始流水可在「数据库管理」页翻 `chat_message` 表。
+
+### 2.8 运行参数
+
+「运行参数」分组把 `.env` 兜底 + 定时总结的一批键搬到本页（点摘要卡弹浮窗编辑），
+写回 `.config/main/.env`，改完点「系统配置」页的「热重载配置」即生效（可热更项）。**键表见** [`configuration.md`](configuration.md)。
+
 > 💡 关于作用域：`scope="user"` 的会话按「同一个人 + 同一个插件」隔离（不同插件各自记各自的历史与记忆）；
-> `scope="group"` 的会话按「群 + 插件」隔离，**不注入个人长期记忆**（群里不该知道私聊细节）。
+> `scope="group"` 则**根本不建 `llm_session`**，群上下文由聊天流水（`chat_message`）提供，
+> 因此群聊会话级操作（换人设 / 清空）在群作用域下不适用；群聊回复注入的是群记忆 + 当前发言者个人记忆。
 
 ---
 
-## 3. 插件开发：`feature.llm`
-
-`Feature` 自带懒加载属性 `feature.llm`（`src/core/llm.py::PluginLLM`），**自动带上插件名**做上下文隔离，
-所以插件永远不需要自己读配置、自己建 client、自己拼记忆。
-
-```python
-@cmd.handle()
-async def _(event: MessageEvent, args=CommandArg()):
-    if not await feature.llm.available():
-        await cmd.finish("还没配置大模型哦（.env 或 WebUI「LLM 与记忆」页）")
-    reply = await feature.llm.ask(args.extract_plain_text().strip() or "你好")
-    await cmd.finish(reply)
-```
-
-### 3.1 API 一览
-
-| 方法 | 说明 |
-|---|---|
-| `await feature.llm.available()` | 是否已配置可用（插件应先判断） |
-| `await feature.llm.ask(text, **kw)` | 返回字符串，最常用 |
-| `await feature.llm.complete(text, **kw)` | `ask` 的别名（想读起来像「补全」时用） |
-| `await feature.llm.chat(messages, **kw)` | 传完整消息列表，返回 `LLMResult`（含 `text / model / usage / latency_ms / provider / preset`） |
-| `feature.llm.stream(source, **kw)` | 异步生成器，`source` 可是字符串或消息列表；`async for chunk in ...`，`chunk.delta` 增量、`chunk.done=True` 的那片带完整 `chunk.text` 与 `chunk.result` |
-| `await feature.llm.remember(user_id, key, value)` | 人工记一条关键信息（不会被自动提炼覆盖） |
-| `await feature.llm.forget(user_id, key=None)` | 删一条 / 全删（`key=None`）关键信息，返回删除条数 |
-| `await feature.llm.profile(user_id)` | 读某个用户的「印象 + 关键信息」 |
-| `await feature.llm.set_impression(user_id, text)` | 手写印象 |
-| `await feature.llm.refresh_profile(user_id, **kw)` | 立刻让模型提炼一次印象（一般不用手动调） |
-| `await feature.llm.clear_memory(user_id)` | 清空该用户长期记忆 |
-| `await feature.llm.context(scope, scope_id)` | 查本插件在某作用域的会话（`None` = 还没有） |
-| `await feature.llm.use_preset(scope, scope_id, 名字)` | 给某会话换人设（`None`/`""` = 回落默认） |
-| `await feature.llm.use_provider(scope, scope_id, 名字)` | 给某会话换服务商（同上） |
-| `await feature.llm.clear_context(scope, scope_id)` | 清掉某作用域的历史，返回删除条数 |
-| `await feature.llm.providers()` / `.presets()` | 读服务商 / 人设列表（做管理命令时用） |
-
-### 3.2 常用关键字参数（`**kw`）
-
-| 参数 | 说明 |
-|---|---|
-| `scope="user"` + `scope_id=QQ` | 个人上下文 + 长期记忆（最常用于私聊 / 群里针对某个人） |
-| `scope="group"` + `scope_id=群号` | 群聊上下文，**不注入个人记忆** |
-| 都不传 | 无状态单次问答，**不落库**（适合翻译、总结这类工具型调用） |
-| `preset="人设名"` | 指定人设；不传用 `LLM_DEFAULT_PRESET` |
-| `provider="服务商名"` | 指定服务商；不传用默认服务商（再不行 `.env` 兜底） |
-| `model=` / `temperature=` / `max_tokens=` / `extra={...}` | 临时覆盖参数（`extra` 会并进请求体，用于 `top_p` 等各家私有参数） |
-| `memory=False` | 这次不注入长期记忆（上下文照常） |
-| `use_stream=True/False` | 临时强制开/关流式（默认跟随 `LLM_STREAM_ENABLE`） |
-
-> ⚠️ 传了 `scope` 就**必须**给 `scope_id`，否则抛 `LLMError`（防止写串库）。
-> ⚠️ 指定的人设名如果**不存在**会直接报错（不会静默用错人设）；只有「默认人设名」查不到才会安静回落到无人设。
-
-### 3.3 异常处理
-
-所有失败都抛 `src.core.llm.LLMError`（已把第三方异常包装成人话，如
-`LLM 请求失败（deepseek）：...`、`LLM 已全局禁用（LLM_ENABLE=false）`、`除 system 外至少要有一条消息`）。
-
-```python
-from src.core.llm import LLMError
-
-try:
-    reply = await feature.llm.ask(text)
-except LLMError as exc:
-    feature.logger.warning("调用失败：{}", exc)
-    await cmd.finish("模型开小差了，稍后再试……")
-```
-
-> 记忆类方法（`remember` / `profile` 等）**即使 LLM 全局禁用也能用**（它们只读写数据库），
-> 但 `LLM_ENABLE=false` 时 `available()` 为 `False`，`ask/chat/stream` 会报错。
-
----
-
-## 4. 人设（Preset）
+## 3. 人设（Preset）
 
 人设 = **一段 system prompt + 几个采样参数 + 一个名字**。框架启动时会自动把 `src/core/presets/*.md`
 导成内置人设（同名已被「人工/导入」占用的会跳过）。
 
-### 4.1 文件格式（Markdown + front-matter）
+> 在插件代码里指定人设（`preset=` / `use_preset()`）见 [`llm-api.md`](llm-api.md)。
+
+### 3.1 文件格式（Markdown + front-matter）
 
 ```markdown
 ---
@@ -235,7 +173,7 @@ enabled: true              # 可选：默认 true
 - `name` 不合法或正文为空 → 导入失败（400），不会落库。
 - front-matter 解析优先用 **PyYAML**；没装也能工作（退化成逐行 `key: value`，此时嵌套 `params` 请写成 JSON 或顶层平铺）。
 
-### 4.2 覆盖规则（`import_preset_text`）
+### 3.2 覆盖规则（`import_preset_text`）
 
 | 库中已有人设来源 | 新导入来源 | 结果 |
 |---|---|---|
@@ -246,25 +184,28 @@ enabled: true              # 可选：默认 true
 
 > 结论：**WebUI 改过的不会被内置文件或再次导入悄悄覆盖**；重复导入同一个文件 = 正常「更新」。
 
-### 4.3 自建内置人设（可选）
+### 3.3 自建内置人设（可选）
 
 把人设 `.md` 丢进 `src/core/presets/`，重启即生效（属可提交素材）。
 想强刷：`await llm.load_builtin_presets(force=True)`。
 
 ---
 
-## 5. 上下文与长期记忆
+## 4. 上下文与长期记忆
 
-### 5.1 上下文（短期）
+> 记忆与上下文相关的 `.env` 键（`LLM_CONTEXT_ROUNDS` / `LLM_MEMORY_ENABLE` / `LLM_MAX_FACTS` /
+> `LLM_SUMMARY_*` / `LLM_COMPRESS_THRESHOLD` / `LLM_GROUP_CONTEXT_MSGS`）定义见 [`configuration.md`](configuration.md)。
 
-- 只有传了 `scope` + `scope_id` 才有上下文；按 `(作用域, 谁, 插件名)` 三元组建会话，各插件互不干扰。
+### 4.1 上下文（短期）
+
+- 只有传了 `scope` + `scope_id` 才有上下文；按「**作用域 + 谁 + 插件名**」三元组建会话，各插件互不干扰。
 - **个人对话**（`scope="user"`）：每轮自动带最近 `LLM_CONTEXT_ROUNDS` 轮（1 轮 = 用户 + 助手）历史；
-- **群聊**（`scope="group"`）：**不再建 `llm_session`**，群上下文由 `chatlog`（`chat_message` 表）
-  提供——插件从聊天流水读最近 N 条群消息注入，避免一份历史存两处；
-- 超出轮数的老消息仍留在库里（WebUI 可见），只是不再进提示词；超阈值会被**压缩**进 `llm_session.summary`；
-- 想清空：QQ 侧由插件自己实现，WebUI 侧在「会话」卡片点删除 / 批量清空；插件内用 `clear_context()`。
+- **群聊**（`scope="group"`）：**不建 `llm_session`**，群上下文由聊天流水（`chat_message` 表）
+  提供 —— 插件从流水读最近 N 条群消息注入，避免一份历史存两处；
+- 超出轮数的老消息仍留在库里（WebUI 可见），只是不再进提示词；超阈值会被**压缩**（见 4.4，仅个人会话）；
+- 想清空：WebUI 侧在「会话」卡片点清空；插件内用 `clear_context()`。
 
-### 5.1a 群聊「对话模式」（paperbot_chat 插件层实现）
+### 4.2 群聊「对话模式」（`paperbot_chat` 插件层实现）
 
 `paperbot_chat` 在「群聊上下文」之上做了一层**艾特触发、免艾特续聊**：
 
@@ -273,7 +214,7 @@ enabled: true              # 可选：默认 true
 - 自动接话时从**聊天流水**（`chat_message`）读最近 N 条群消息（`group_history` 配置项）拼进上下文；
 - 群聊回复注入：**群记忆 + 当前发言者的个人记忆**（不是整个群所有人的记忆）。
 
-### 5.2 长期记忆（印象 + 关键信息 + 群记忆）
+### 4.3 长期记忆（印象 + 关键信息 + 群记忆）
 
 **个人记忆**（`scope="user"`，按 QQ 区分）：
 
@@ -282,16 +223,16 @@ enabled: true              # 可选：默认 true
 
 **群记忆**（`scope="group"`，按群号区分）：一段共同话题/群梗/正在聊的事，存 `llm_group_profile`。
 
-**自动提炼**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
+**定时总结**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
 增量跑一轮：
 
 - 从 `chat_message`（聊天流水）取每个用户 / 每个群自水位线之后的新消息；
-- 用「总结模型」（`LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL`，未配置则用默认服务商）提炼；
+- 用「总结模型」（`LLM_SUMMARY_PROVIDER` / `LLM_SUMMARY_MODEL`，未配置则用默认服务商）生成记忆；
 - 单次最多 `LLM_SUMMARY_MAX_MSGS` 条（超出只取最近，水位线直推最新）；
 - 写回 `llm_user_profile` / `llm_group_profile` 并推进水位线；
 - 全程后台运行，**不阻塞对话**；失败只记日志、不推进水位线（下一轮重试）。
 
-自动提炼出的关键信息带 `source=auto`，**不会覆盖人工记录**（`source=manual`）。
+定时总结出的关键信息带 `source=auto`，**不会覆盖人工记录**（`source=manual`）。
 
 **注入格式**（拼在 system prompt 之后）：
 
@@ -307,74 +248,34 @@ enabled: true              # 可选：默认 true
 - 整体开关 `LLM_MEMORY_ENABLE`，单次可用 `memory=False` 关掉。
 - 群聊注入的是「群记忆 + 当前发言者个人记忆」。
 
-### 5.3 上下文压缩
+### 4.4 上下文压缩
 
-会话消息超过 `LLM_COMPRESS_THRESHOLD`（默认 40）条时，后台调度器把**超出保留窗口的旧消息**
-交给总结模型压成一段摘要，合并进 `llm_session.summary`；注入顺序：
+**个人会话**（`scope="user"`）的消息数超过 `LLM_COMPRESS_THRESHOLD`（默认 40）条时，
+后台调度器把**超出保留窗口的旧消息**交给总结模型压成一段摘要，合并进 `llm_session.summary`，
+并物理删除已压缩的旧原文。代码里设计的注入顺序是：
 
 ```
 人设 → 记忆（个人/群 + 发言者） → [更早的对话摘要] → 最近 N 轮原文
 ```
 
----
-
-## 6. 数据表（共享 SQLite）
-
-| 表 | 关键字段 | 唯一键 |
-|---|---|---|
-| `chat_message` | `message_type` / `group_id` / `user_id` / `nickname` / `content` / `message_id` / `is_bot` / `created_at` | —（原始聊天流水） |
-| `llm_provider` | `name` / `base_url` / `api_key` / `model` / `models`(JSON 数组，最多 3 个) / `priority` / `temperature` / `max_tokens` / `timeout` / `extra`(JSON) / `enabled` / `is_default` / `updated_by` / `updated_at` | `name` |
-| `llm_preset` | `name` / `display_name` / `description` / `system_prompt` / `params`(JSON) / `enabled` / `source` / `updated_by` / `updated_at` | `name` |
-| `llm_session` | `scope_type` / `scope_id` / `plugin_name` / `preset_name` / `provider_name` / `message_count` / `user_message_count` / `summary` / `created_at` / `updated_at` | (`scope_type`,`scope_id`,`plugin_name`) |
-| `llm_message` | `session_id` / `role` / `content` / `name` / `created_at` | — |
-| `llm_user_profile` | `user_id` / `impression` / `message_count` / `last_msg_id` / `impression_at` / `updated_at` | `user_id` |
-| `llm_user_fact` | `user_id` / `fact_key` / `fact_value` / `source` / `updated_at` | (`user_id`,`fact_key`) |
-| `llm_group_profile` | `group_id` / `memory` / `last_msg_id` / `message_count` / `updated_at` | `group_id` |
-
-- 密钥是**明文存库**（与 `.env` 一致，本项目定位是自用机器人）；请勿把 `data/paperbot.db` 传出去。
-- `source` 取值：人设 `builtin/import/manual`；关键信息 `auto/manual`。
-- 时间列一律**按 UTC 存**（SQLite `func.now()` 就是 UTC），API / WebUI 展示时统一换算成
-  **北京时间**（形如 `2026-09-30 18:11:45+08:00`，`llm.fmt_dt()` 负责转换）。
-- WebUI「数据库管理」页只读，可直接翻表排查。
+> ⚠️ **当前实现有缺**（详见 [`plans/07-memory-optimization.md`](plans/07-memory-optimization.md) 的 P0）：
+> - 读取 `summary` 注入提示词的代码**只写在群分支**，而群作用域根本不建 `llm_session`
+>   （`find_session(group, …)` 恒为 `None`）→ 这段是**死代码**；
+> - 于是**个人会话的 `summary` 写了却从不被注入**：私聊超阈值后旧消息被物理删除、摘要又进不了上下文（静默丢失）；
+> - **群上下文的压缩则整体缺失**。
+>
+> 所以现阶段「压缩」对上下文实际没有帮助，属已知待修复项。
 
 ---
 
-## 7. REST API 一览（前缀 `/api`，需 `Authorization: Bearer <WEBUI_TOKEN>`）
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/llm/status` | 总览（开关 / 是否可用 / 各计数 / 中文标签） |
-| GET | `/llm/providers` | 服务商列表（密钥掩码，含虚拟 `env` 行） |
-| PUT | `/llm/providers/{name}` | 新增或更新（`name=="env"` → 400；`api_key` 传掩码/省略 = 不改） |
-| DELETE | `/llm/providers/{name}` | 删除（`env` → 400，不存在 → 404，删默认后自动补默认） |
-| POST | `/llm/providers/{name}/test` | 试连一次，返回文本 / 模型 / 耗时 / 用量 |
-| GET | `/llm/presets?with_prompt=1` | 人设列表（可带正文） |
-| GET | `/llm/presets/{name}` | 人设详情（含导出文本 `text`） |
-| PUT | `/llm/presets/{name}` | 新建 / 保存（来源变「人工」） |
-| DELETE | `/llm/presets/{name}` | 删除 |
-| POST | `/llm/presets/import` | 导入 `{text, filename?, force?}` → `{action: created/updated/skipped}` |
-| GET | `/llm/presets/{name}/export` | 导出 `.md`（`Content-Disposition` 文件名） |
-| GET | `/llm/sessions?limit=` | 会话列表（limit 1~500） |
-| GET | `/llm/sessions/{id}/messages?limit=` | 某会话消息 |
-| PUT | `/llm/sessions/{id}` | 换人设 / 换服务商（不存在 → 400） |
-| DELETE | `/llm/sessions/{id}` | 删单条会话（连带消息） |
-| DELETE | `/llm/sessions?scope_type=&scope_id=&plugin_name=` | 按作用域批量清空 |
-| GET | `/llm/users?limit=` | 有记忆的用户列表 |
-| GET | `/llm/users/{uid}` | 用户印象 + 关键信息 |
-| PUT | `/llm/users/{uid}/impression` | 手写印象 |
-| PUT | `/llm/users/{uid}/facts` | 手加/更新关键信息（人工来源） |
-| DELETE | `/llm/users/{uid}/facts?key=` | 删单条（`key` 省略 = 全删） |
-| DELETE | `/llm/users/{uid}` | 清空该用户长期记忆 |
-| POST | `/llm/chat` | 试聊 `{prompt, preset?, provider?, scope?, scope_id?}`（无状态） |
-
----
-
-## 8. 自检与常见问题
+## 5. 自检与常见问题
 
 ```powershell
-# 全套自检（76 项：服务商 / 人设 / 会话 / 记忆 / 试聊 / 真实 SDK 链路）
+# 项目根目录执行；具体项数以实际输出为准
 D:\pixi\bin\pixi.exe run check-llm
 ```
+
+> 💡 自检脚本覆盖哪些层、怎么写临时自检，见 [`llm-api.md`](llm-api.md) 第 6 章与 [`development.md`](development.md)。
 
 **Q：插件调用报「还没配置大模型」？**
 A：`await feature.llm.available()` 看一下；要么 `.env` 填 `LLM_BASE_URL/API_KEY/MODEL`，要么 WebUI 加一条服务商并「设为默认」。
@@ -389,14 +290,17 @@ A：看该会话用了哪个人设（WebUI「会话」卡片）——会话上�
 A：不会。会话按「作用域 + 谁 + **插件名**」隔离；如果你发现串了，检查是否漏传 `plugin`（用 `feature.llm` 会自动带）。
 
 **Q：印象一直不更新？**
-A：印象由后台调度器**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）从聊天流水增量提炼（要求 `LLM_SUMMARY_ENABLE=true` 且配置了可用服务商）；想立刻看效果可在 WebUI 手写印象，或调 `summarize_user()`。
+A：印象由后台调度器**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）从聊天流水增量总结（要求 `LLM_SUMMARY_ENABLE=true` 且配置了可用服务商）；想立刻看效果可在 WebUI 手写印象，或调 `summarize_user()`。
 
 **Q：群里会不会知道我跟机器人私聊的内容？**
-A：不会。`scope="group"` 的会话不注入个人长期记忆。
+A：群作用域不注入「整个群所有人」的记忆，只注入群记忆 + 当前发言者个人记忆。
+⚠️ 注意：当前发言者的个人记忆是跨群 + 私聊素材总结出来的，理论上存在经群聊间接泄露的可能（已知问题，见 [`plans/07-memory-optimization.md`](plans/07-memory-optimization.md)）。
 
 **Q：`.env` 里 `LLM_API_KEY` 会被 WebUI 回显吗？**
 A：不会。所有接口只回显掩码；`GET /llm/providers` 里 `env` 行的密钥永远显示 `********`（设置了）或空。
 
 ---
 
-*相关文档：插件开发协议见 `docs/plugin-dev.md`（第 12 章「调用大模型」）。*
+*相关文档：开发者 API 参考 [`llm-api.md`](llm-api.md)；配置全表 [`configuration.md`](configuration.md)；
+WebUI 接口一览 [`api.md`](api.md)；架构与数据表 [`architecture.md`](architecture.md)；
+插件开发指南 [`plugin-dev.md`](plugin-dev.md) / API 参考 [`plugin-api.md`](plugin-api.md)。*

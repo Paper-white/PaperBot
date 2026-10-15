@@ -1,5 +1,8 @@
 # 配置总览
 
+> 📍 本文件是 **`.config/main/.env` 全量键**的唯一信息源（与 `src/config.py` + `webui/routes/config.py`
+> 的字段定义保持一致）；其它文档如需配置键请引用此处。
+
 PaperBot 有**两类配置**，都在 `.config/` 目录下（整个目录已 gitignore，含密钥不进版本库）：
 
 ```
@@ -32,6 +35,7 @@ Copy-Item .env.example .config\main\.env
 | `ONEBOT_ACCESS_TOKEN` | 协议端令牌（**勿提交**） |
 | `SUPERUSERS` | **所有者 QQ 列表**（JSON 数组），拥有全部管理权限 |
 | `COMMAND_START` | 命令前缀（本项目用 `["%"]`） |
+| `DATABASE_URL` | 共享数据库连接串（默认 `sqlite+aiosqlite:///data/paperbot.db`）；**改动需重启**（engine 已建好） |
 
 ### 1.2 WebUI
 
@@ -73,6 +77,7 @@ Copy-Item .env.example .config\main\.env
 | `RENDER_BG_IMAGE_OPACITY` | `0.22` | 贴图透明度 |
 | `RENDER_BG_IMAGE_SIZE` | `58%` | 贴图大小 |
 | `RENDER_BG_IMAGE_POSITION` | `bottom right` | 贴图位置 |
+| `RENDER_TIMEOUT_MS` | `30000` | 单次渲染超时（毫秒） |
 
 ### 1.6 LLM（兜底）
 
@@ -95,9 +100,9 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MAX_FACTS` | `30` | 注入提示词的关键信息条数上限 |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：
-> 记忆提炼改由「定时总结调度器」负责（见下面 1.8 小节）。
+> 记忆自动生成改由「定时总结调度器」负责（见下面 1.7 小节）。
 
-### 1.8 聊天记录与定时总结
+### 1.7 聊天记录与定时总结
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -112,7 +117,7 @@ Copy-Item .env.example .config\main\.env
 
 详见 [`llm.md`](llm.md)。
 
-### 1.9 版本控制（一键拉取云端版本）
+### 1.8 版本控制（一键拉取云端版本）
 
 > 用途：本地开发机 push → 服务器生产环境在 WebUI「设置」页点一下拉取最新代码。
 > 只拉不推，**不碰** `.config/` `data/` `logs/`。见 [`plans/05-version-control.md`](plans/05-version-control.md)。
@@ -156,9 +161,18 @@ Copy-Item .env.example .config\main\.env
 
 | 改什么 | 怎么生效 |
 |---|---|
-| `.config/main/.env` | **需重启** |
-| `.config/<插件名>/config.json`（WebUI 或手改） | 重启 / 热重载 / WebUI 保存后即时生效 |
+| `.config/main/.env` 的**可热更项** | 保存后点右上角**「重载」按钮**（或 QQ `%reload`）**即时生效** |
+| `.config/main/.env` 的**需重启项** | 必须重启（重载会列出来提醒） |
+| `.config/<插件名>/config.json`（WebUI 或手改） | 保存即**自动生效**（无需重启/重载；pluginconf 写完自动刷新插件缓存） |
 | 插件开关规则 / 命令权限 / 授权 | **即时生效**（存库，QQ 命令与 WebUI 共用） |
+
+> **可热更**：`LLM_*`、`RENDER_*`、`BOT_ACTIVE_GROUPS`、`OUTPUT_GUARD_ENABLED`、
+> `GATE_DEFAULT_ENABLED`、`CHATLOG_ENABLE`、`VCS_*`、`WEBUI_TOKEN`（设置页专属）、
+> **`SUPERUSERS`**（所有者名单，权限每次现读）。
+> **需重启**：`DRIVER` / `HOST` / `PORT`、`COMMAND_START`、`ONEBOT_*`、`WEBUI_ENABLE` /
+> `WEBUI_PREFIX`、`DATABASE_URL`、`LOG_*`。
+> ⚠️ 右上角「重载」= 重读 `.env`（可热更项生效）+ **重载所有插件代码**；不会重建监听 / 连接 /
+> 数据库 engine。改**插件代码**（`.py`）后也用它，不用重启整个 Bot。
 
 ---
 
@@ -169,7 +183,9 @@ Copy-Item .env.example .config\main\.env
   + 实时日志滚动 + 历史日志查看 / 删除 / 清理
 - **设置页**：服务与后台参数（`HOST` / `PORT` / `WEBUI_ENABLE` / `WEBUI_PREFIX`）、
   改 WebUI 访问令牌（**即时生效**）、版本信息与版本控制
-- **插件管理页**：每个插件的配置项表单（保存 / 恢复默认）+ 一键热重载
+- **插件管理页**：每个插件的配置项表单（保存 / 恢复默认）；配置**保存即生效**
+- **右上角「重载」按钮**：重读 `.env`（可热更项立即生效）+ 重载所有插件代码（受保护插件跳过）
+- **「LLM 与记忆」页**：底部的「运行参数」分组（原系统配置页的 LLM 兜底 / 定时总结）
 
 > 💡 **列表类配置项**（`SUPERUSERS` / `BOT_ACTIVE_GROUPS` / `COMMAND_START` / `ONEBOT_WS_URLS` 等 `list` 类型）
 > 用「标签」编辑：填一个值点「添加」（或回车），已添加项显示为标签、点 `×` 删除；

@@ -3,7 +3,7 @@
 - 状态：已完成
 - 开始：2026-10-13
 - 相关文件：`src/config.py`、`src/core/pluginconf.py`、`webui/envfile.py`、`bot.py`、`_tests/config_check.py`
-- 相关文档：[`../plugin-dev.md`](../plugin-dev.md) §插件级配置项
+- 相关文档：[`../plugin-api.md`](../plugin-api.md) §5 插件级配置项
 
 ## 目标
 
