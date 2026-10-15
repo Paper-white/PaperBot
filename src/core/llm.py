@@ -1643,12 +1643,19 @@ async def get_profile(
         ),
         "facts": [
             {
+                "id": f.id,
                 "key": f.fact_key,
                 "value": f.fact_value or "",
                 "source": f.source or LLM_FACT_AUTO,
                 "scope_type": f.scope_type or FACT_SCOPE_PRIVATE,
                 "scope_id": f.scope_id or "",
                 "usage": f.usage or FACT_USAGE_MENTION,
+                # 打分所需的内部字段（WebUI 展示不依赖它们）
+                "weight": f.weight if f.weight is not None else 1.0,
+                "access_count": f.access_count or 0,
+                # naive 时间按 UTC 解释（与 _utcnow() 一致）
+                "updated_at_ts": f.updated_at.timestamp() if f.updated_at else 0.0,
+                "last_used_at_ts": f.last_used_at.timestamp() if f.last_used_at else None,
                 "updated_at": (
                     fmt_dt(f.updated_at)
                 ),
@@ -1745,9 +1752,15 @@ async def set_fact(
                 user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id
             )
             session.add(row)
+        changed = (row.fact_value or "") != (value or "")
         row.fact_value = value or ""
         row.source = source
         row.usage = usage
+        if changed:
+            # 值变了 → 重置生命周期统计，避免旧 weight/使用痕迹残留在新值上
+            row.weight = 1.0
+            row.access_count = 0
+            row.last_used_at = None
         await session.commit()
     return await get_profile(uid)
 
@@ -1846,23 +1859,47 @@ def _dedup_facts(facts: list[dict]) -> list[dict]:
     return list(seen.values())
 
 
-def _fact_score(f: dict) -> float:
-    """事实打分（用于分槽内/合流排序）。
+# 权重下限（只降不删：无论衰减多久，行永远保留、weight 不低于它）
+_MIN_WEIGHT = 0.05
 
-    v1 恒等于 weight（现无该字段时取默认 1.0）→ 等价于按 updated_at 排序；
-    未来接入半衰期衰减时只改这里，调用方不动。
+
+def _fact_score(f: dict, *, now: Optional[datetime] = None) -> float:
+    """事实打分 = weight × 半衰期衰减（manual 不衰减）。
+
+    - 关闭衰减 / 无 weight 字段 → 恒 1.0（等价按 updated_at 排序）；
+    - manual（人工写入）不衰减；
+    - global 用 half_life_global、窗口事实用 half_life_window；
+    - 锚点 = last_used_at ?? updated_at_ts ?? now。
+    低分只影响排序（沉底），永不删除。
     """
-    try:
+    if not settings.llm_memory_decay_enable:
         return float(f.get("weight") or 1.0)
-    except (TypeError, ValueError):
-        return 1.0
+    if f.get("source") == LLM_FACT_MANUAL:
+        return float(f.get("weight") or 1.0)
+    weight = float(f.get("weight") or 1.0)
+    half_life = (
+        settings.llm_memory_decay_half_life_global
+        if f.get("scope_type") == FACT_SCOPE_GLOBAL
+        else settings.llm_memory_decay_half_life_window
+    )
+    if not half_life or half_life <= 0:
+        return weight
+    anchor = f.get("last_used_at_ts") or f.get("updated_at_ts")
+    if not anchor:
+        return weight
+    age_days = max(0.0, ((now or _utcnow()).timestamp() - float(anchor)) / 86400.0)
+    return max(_MIN_WEIGHT, weight * (0.5 ** (age_days / half_life)))
 
 
 def _sort_facts(facts: list[dict]) -> list[dict]:
-    """按分数降序、updated_at 降序（同分时新者优先）排序。"""
+    """按分数降序、updated_at 降序（同分时新者优先）排序。
+
+    同一批排序内固定同一个 `now`，避免边界抖动。
+    """
+    now = _utcnow()
     return sorted(
         facts,
-        key=lambda f: (_fact_score(f), f.get("updated_at") or ""),
+        key=lambda f: (_fact_score(f, now=now), f.get("updated_at") or ""),
         reverse=True,
     )
 
@@ -1940,6 +1977,100 @@ def _render_fact_slot(title: str, facts: list[dict], *, tiers: bool) -> str:
     return title + "\n" + "\n\n".join(blocks)
 
 
+def _use_slot_path(scope: str, slots: bool) -> bool:
+    """是否走「分槽（通用画像 / 窗口事实）」路径。"""
+    return bool(slots and settings.llm_memory_slots_enable and scope in ("group", "private"))
+
+
+def _memory_fact_sections(
+    facts: list[dict], *, scope: str, limit: int, slots: bool
+) -> list[tuple[str, list[dict]]]:
+    """算出记忆注入的分段：[（小标题, 事实列表）, ...]（顺序即渲染顺序）。
+
+    - 分槽路径（`slots` 开 + `llm_memory_slots_enable` 开 + `scope` 非 "all"）：
+      通用画像 / 窗口事实两段，各自保底；
+    - 否则：单段「已知关键信息」（用于关闭分槽 / 隔离关闭）。
+    本函数是「渲染」与「复述加固选数」的**唯一口径**，二者必须一致。
+    """
+    facts = [f for f in facts if f.get("key")]
+    if _use_slot_path(scope, slots):
+        groups = select_facts_by_slots(facts, scope=scope, max_facts=limit)
+        out: list[tuple[str, list[dict]]] = []
+        general = groups.get("global") or []
+        window = groups.get("window") or []
+        if general:
+            out.append(("【已知关键信息（通用画像）】", general))
+        if window:
+            out.append(("【本群已知】" if scope == "group" else "【私聊已知】", window))
+        return out
+    if limit and limit > 0:
+        facts = facts[:limit]
+    return [("【已知关键信息】", facts)] if facts else []
+
+
+def _injected_facts(facts: list[dict], *, scope: str, limit: int, slots: bool) -> list[dict]:
+    """这次注入**实际会渲染**的事实（供复述加固定位；顺序即渲染顺序）。"""
+    out: list[dict] = []
+    for _title, items in _memory_fact_sections(facts, scope=scope, limit=limit, slots=slots):
+        out.extend(items)
+    return out
+
+
+async def _reinforce_from_profile(profile: dict, *, scope: str) -> None:
+    """按 `build_memory_block` 的口径选出实际注入的事实，做复述加固（fire-and-forget 语义的 await）。
+
+    只加固「真正被注入」的条目（含分槽保底选中的），不是该用户全部 facts。
+    """
+    if not profile:
+        return
+    selected = _injected_facts(
+        _dedup_facts(list(profile.get("facts") or [])),
+        scope=scope,
+        limit=settings.llm_max_facts,
+        slots=True,
+    )
+    await _touch_facts(selected)
+
+
+async def _touch_facts(facts: list[dict]) -> None:
+    """对被注入（复述）的事实做加固：weight 回血、access_count+1、last_used_at=now。
+
+    节流：距上次 last_used_at 不足 `LLM_MEMORY_DECAY_TOUCH_INTERVAL` 秒则跳过（减少写放大）。
+    失败只记 debug 日志，绝不影响对话主流程。
+    """
+    if not settings.llm_memory_decay_enable:
+        return
+    now = _utcnow()
+    interval = max(0, int(settings.llm_memory_decay_touch_interval or 0))
+    ids: list[int] = []
+    for f in facts:
+        fid = f.get("id")
+        if not fid:
+            continue
+        last = f.get("last_used_at_ts")
+        if interval and last and (now.timestamp() - float(last)) < interval:
+            continue
+        ids.append(int(fid))
+    if not ids:
+        return
+    try:
+        async with get_session() as session:
+            rows = (
+                (await session.execute(select(LlmUserFact).where(LlmUserFact.id.in_(ids))))
+                .scalars()
+                .all()
+            )
+            for row in rows:
+                row.access_count = int(row.access_count or 0) + 1
+                row.weight = min(
+                    1.0, float(row.weight or 1.0) + float(settings.llm_memory_decay_reinforce or 0)
+                )
+                row.last_used_at = now
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"记忆复述加固失败（不影响对话）：{exc}")
+
+
 def build_memory_block(
     profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private",
     slots: bool = True, usage_tiers: bool = True,
@@ -1969,26 +2100,14 @@ def build_memory_block(
     if impression and scope != "group":
         lines.append(f"【你对 {who} 的印象】{impression}")
     facts = _dedup_facts(list(profile.get("facts") or []))
-    facts = [f for f in facts if f.get("key")]
     limit = settings.llm_max_facts if max_facts is None else max_facts
-    # 分槽保底：通用画像 / 窗口事实 分槽渲染，避免近期事实挤掉长期画像
-    if slots and settings.llm_memory_slots_enable and scope in ("group", "private"):
-        groups = select_facts_by_slots(facts, scope=scope, max_facts=limit)
-        tiers = usage_tiers and settings.llm_memory_usage_enable
-        general = groups.get("global") or []
-        window = groups.get("window") or []
-        if general:
-            lines.append(_render_fact_slot("【已知关键信息（通用画像）】", general, tiers=tiers))
-        if window:
-            title = "【本群已知】" if scope == "group" else "【私聊已知】"
-            lines.append(_render_fact_slot(title, window, tiers=tiers))
-    else:
-        # 关闭分槽 / 隔离关闭（scope="all"）：保持原单层渲染
-        if limit and limit > 0:
-            facts = facts[:limit]
-        if facts:
+    tiered = _use_slot_path(scope, slots) and usage_tiers and settings.llm_memory_usage_enable
+    for title, items in _memory_fact_sections(facts, scope=scope, limit=limit, slots=slots):
+        if tiered:
+            lines.append(_render_fact_slot(title, items, tiers=True))
+        else:
             lines.append(
-                "【已知关键信息】\n" + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in facts)
+                title + "\n" + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in items)
             )
     if not lines:
         return ""
@@ -2513,8 +2632,11 @@ async def _build_request(
         if settings.llm_memory_scope_isolation:
             profile = await get_profile(scope_key, scope_type=FACT_SCOPE_PRIVATE)
             block = build_memory_block(profile, scope="private")
+            await _reinforce_from_profile(profile, scope="private")
         else:
-            block = build_memory_block(await get_profile(scope_key), scope="all")
+            profile = await get_profile(scope_key)
+            block = build_memory_block(profile, scope="all")
+            await _reinforce_from_profile(profile, scope="all")
         if block:
             sys_parts.append(block)
         # 会话压缩摘要：超阈值后旧原文被物理删除，摘要写进了 llm_session.summary，
@@ -2543,10 +2665,13 @@ async def _build_request(
                     sender_block = build_memory_block(
                         sender_profile, owner=owner, scope="group"
                     )
+                    await _reinforce_from_profile(sender_profile, scope="group")
                 else:
+                    sender_profile = await get_profile(sender_id)
                     sender_block = build_memory_block(
-                        await get_profile(sender_id), owner=owner, scope="all"
+                        sender_profile, owner=owner, scope="all"
                     )
+                    await _reinforce_from_profile(sender_profile, scope="all")
                 if sender_block:
                     # build_memory_block(scope="group") 自带标题与边界声明，直接追加即可
                     sys_parts.append(sender_block)

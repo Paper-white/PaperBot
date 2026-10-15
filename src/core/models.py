@@ -470,6 +470,15 @@ class LlmUserFact(Base):
     usage: Mapped[str] = mapped_column(
         String(16), default=FACT_USAGE_MENTION, server_default=text("'mention'")
     )
+    weight: Mapped[float] = mapped_column(
+        Float, default=1.0, server_default=text("1.0")
+    )  # 衰减权重（1.0 = 全新；只降不删，恒 ≥ MIN_WEIGHT）
+    access_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )  # 被注入（复述）的累计次数
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, default=None
+    )  # 最近一次被注入的时间（NULL = 从未被用过）
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )

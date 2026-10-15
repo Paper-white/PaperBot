@@ -262,6 +262,11 @@ WebUI 手写（`manual`）只做别名归一、保留原 key 不丢弃。
 `uncertain`（推断/弱依据，谨慎参考）。提炼时由模型产出（漏给则由 key 兜底、默认 mention），
 注入时**槽内按档分三个子块**渲染（`【可自然提及】` / `【只影响语气，勿说破】` / `【不太确定，谨慎参考】`）。
 
+**半衰期软衰减 + 复述加固**（`LLM_MEMORY_DECAY_ENABLE`，默认 `true`）：事实打分 =
+`weight × 0.5^(age/half_life)`（通用 60 天、窗口 30 天；`manual` 不衰减）；
+被注入即回血 `weight+0.2`（上限 1.0）、`access_count+1`、刷新 `last_used_at`（6 小时节流）。
+**只降权、不删除**：低分只让记忆在分槽排序里沉底（下限 0.05），行永远保留。
+
 **定时总结**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
 增量跑一轮：
 

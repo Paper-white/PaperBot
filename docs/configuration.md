@@ -102,6 +102,11 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MEMORY_SLOTS_ENABLE` | `true` | 记忆注入分槽保底：通用画像/窗口事实分槽，各槽至少保底若干条，避免近期事实挤掉长期画像 |
 | `LLM_MEMORY_KEY_EXACT` | `true` | 受控 key 词表：自动提炼时未命中词表的自造 key 直接丢弃（`false` = 放行原样） |
 | `LLM_MEMORY_USAGE_ENABLE` | `true` | 记忆用法档：注入时按 mention/tone/uncertain 分组渲染（`false` = 忽略档位、单列表渲染） |
+| `LLM_MEMORY_DECAY_ENABLE` | `true` | 半衰期软衰减 + 复述加固（只降权不删；`false` = 不衰减） |
+| `LLM_MEMORY_DECAY_HALF_LIFE_GLOBAL` | `60` | 通用事实半衰期（天） |
+| `LLM_MEMORY_DECAY_HALF_LIFE_WINDOW` | `30` | 窗口事实（本群/私聊）半衰期（天） |
+| `LLM_MEMORY_DECAY_REINFORCE` | `0.2` | 每次被注入（复述）的权重回血量 |
+| `LLM_MEMORY_DECAY_TOUCH_INTERVAL` | `21600` | 复述加固写库节流（秒，默认 6 小时） |
 | `LLM_MAX_FACTS_STORED` | `200` | 单用户单 scope 的事实库内条数上限（超出按最旧 auto 淘汰，manual 永不淘汰） |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：

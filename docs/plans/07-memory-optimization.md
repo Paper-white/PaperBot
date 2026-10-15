@@ -118,23 +118,17 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
   auto 未命中即丢弃（`LLM_MEMORY_KEY_EXACT`），manual 只归一不丢弃
 - [x] **P2 时间归一化**：相对日期词按消息发送时间内联标注成绝对日期，prompt 与闸门同源
 - [x] **P2 用法档**：`llm_user_fact.usage`（mention/tone/uncertain），槽内分档渲染（`LLM_MEMORY_USAGE_ENABLE`）
+- [x] **P2 半衰期软衰减 + 复述加固**：`weight`/`access_count`/`last_used_at`；
+  `_fact_score = weight × 0.5^(age/half_life)`（manual 不衰减）；注入即回血 + 节流写库；**只降权不删**
+- [x] **P3 `chat_message` 归档 / 保留期**：`chat_message_archive` 冷区表 + 每日归档
+  （只归档「时间到期且已过水位线」的消息）；`CHATLOG_ARCHIVE_ENABLE` / `CHATLOG_RETENTION_DAYS=90`
 - [x] 清理废弃 `refresh_profile`；清理死配置 `LLM_GROUP_CONTEXT_MSGS`；`_migrate_llm_fact_scope` 幂等迁移
 
-### 待办（设计就绪，按 oracle 建议缓做）
-- [ ] **单值改口版本链（`supersedes_id`）**：见下方「改口版本链设计结论」，**P2 缓做**
-      （partial unique index 迁移有回归风险，且依赖词表先稳定）
-- [ ] **半衰期软衰减 + 复述加固**：见下方「衰减设计结论」，**P2 缓做**（单机 bot 记忆量小、ROI 慢）；
-      `_fact_score` 排序接口已铺好，接入时无需改调用方
+### 待办
+- [ ] **单值改口版本链（`supersedes_id`）**：见下方「改口版本链设计结论」（partial unique index 迁移）
 - [ ] **WebUI 手写档位下拉**（P3）：用户详情页给 fact 加 usage 选择（默认 mention）
-
-### P3（控规模）
-- [x] **`chat_message` 归档 / 保留期**（2026-10-15 第四批）：`chat_message_archive` 冷区表 +
-  `archive_messages` / `restore_messages` + `scheduler.run_archive_cycle`（每日一轮）；
-  只归档「时间到期**且**已过提炼水位线」的消息（含「有发言无画像」守卫），绝不丢未提炼数据；
-  开关 `CHATLOG_ARCHIVE_ENABLE` / `CHATLOG_RETENTION_DAYS=90` / `CHATLOG_ARCHIVE_BATCH`
 - [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
 - [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
-- [ ] 深冷归档（archive 表也大时，导出 JSONL/parquet）— 暂不做
 
 ### 改口版本链设计结论（oracle 评审，未实施）
 - 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空），均可自动补列；
@@ -146,12 +140,12 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - 读路径 `get_profile` 只返回 active；「以前说过」v1 仅保留在库、不注入；
 - 开关 `llm_memory_supersede_enable`；**结论：P2 缓做**（低频场景，不修只丢历史、不影响正确性）。
 
-### 衰减设计结论（oracle 评审，未实施）
-- 字段：`llm_user_fact` 加 `weight`（默认 1.0）/ `last_used_at`（可空）/ `access_count`（默认 0），均可被 `_add_missing_columns` 自动补列；
+### 衰减设计结论（oracle 评审，**已实施**，2026-10-15）
+- 字段：`llm_user_fact` 加 `weight`（默认 1.0）/ `access_count`（默认 0）/ `last_used_at`（可空），均自动补列；
 - 公式：`score = weight × 0.5^(age_days/half_life)`，`manual` 不衰减、`global` 半衰期 60 天、`group/private` 30 天；
 - 强化：被注入即 `weight=min(1.0, weight+0.2)`、`last_used_at=now`、`access_count+1`（节流 6h）；
-- 时机：**注入时实时算**（不回写），不做每日批量任务；「只降权不删」（`weight` 恒 ≥0.05、行不 DELETE）；
-- 结论：**P2 缓做**；`_fact_score` 已预留在 `llm.py`，接入时无需改调用方。
+- 时点：注入时实时算（不回写），「只降权不删」（`weight` 恒 ≥0.05、行不 DELETE）；
+- 实现：`_fact_score` 升级为衰减打分；`_memory_fact_sections` 作为「渲染与复述加固」的唯一选数口径。
 
 ### 已废弃（不再需要）
 - [x] ~~修复「群上下文压缩死代码」~~：群作用域改走 `chat_message` 流水，不再依赖群 `llm_session`；群摘要注入分支保留但当前恒空（无群会话），不影响功能

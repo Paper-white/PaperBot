@@ -143,6 +143,12 @@ class Settings(BaseSettings):
     llm_memory_key_exact: bool = True
     # 记忆用法档：注入时按 mention/tone/uncertain 分组渲染（False = 忽略档位、单列表渲染）
     llm_memory_usage_enable: bool = True
+    # 记忆半衰期软衰减 + 复述加固（只降权不删）
+    llm_memory_decay_enable: bool = True          # 总开关
+    llm_memory_decay_half_life_global: float = 60.0   # 通用事实半衰期（天）
+    llm_memory_decay_half_life_window: float = 30.0   # 窗口事实半衰期（天）
+    llm_memory_decay_reinforce: float = 0.2       # 每次被注入的权重回血量
+    llm_memory_decay_touch_interval: int = 21600  # 强化写库节流（秒，默认 6 小时）
 
     # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
     # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。
