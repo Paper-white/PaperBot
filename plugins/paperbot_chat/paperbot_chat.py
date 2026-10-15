@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from nonebot import get_driver
@@ -91,10 +92,10 @@ feature = Feature(
         },
         {
             "key": "group_cooldown",
-            "label": "群自动回复冷却（秒）",
+            "label": "群回复合并窗口（秒）",
             "type": "int",
             "default": 3,
-            "hint": "对话模式下连续回复的最小间隔，防刷屏",
+            "hint": "窗口内到达的多条群消息会合并成一次回复（不再丢消息）；0 = 不合并、每条立即回复",
         },
         {
             "key": "group_history",
@@ -141,6 +142,9 @@ _COOLDOWN: dict[str, float] = {}
 
 # 群聊对话模式：{群号: {"active": 最后活跃时间, "reply": 上次回复时间}}
 _GROUP_MODE: dict[str, dict[str, float]] = {}
+
+# 群自动回复「合并窗口」：{群号: {"items": [(uid, name, text)], "task": asyncio.Task|None}}
+_GROUP_BUFFER: dict[str, dict] = {}
 
 
 def _split_words(raw: str) -> list[str]:
@@ -197,6 +201,16 @@ def _group_id(event: MessageEvent) -> str:
     return str(getattr(event, "group_id", "") or "")
 
 
+def _nickname(event: MessageEvent) -> str:
+    """取发言者昵称（群名片优先，其次昵称，最后回落 QQ 号）。"""
+    sender = getattr(event, "sender", None)
+    if sender is not None:
+        nick = getattr(sender, "card", "") or getattr(sender, "nickname", "") or ""
+        if nick:
+            return str(nick)
+    return _need_id(event)
+
+
 def _cooldown_left(key: str) -> int:
     """还剩几秒冷却（0 = 可以调用，并顺手刷新时间戳）。"""
     wait = int(feature.cfg("cooldown", 3) or 0)
@@ -208,21 +222,6 @@ def _cooldown_left(key: str) -> int:
     if left > 0 and now < last + wait:
         return left
     _COOLDOWN[key] = now
-    return 0
-
-
-def _group_cooldown_left(gid: str) -> int:
-    """群对话模式的自动回复冷却。"""
-    wait = int(feature.cfg("group_cooldown", 3) or 0)
-    mode = _GROUP_MODE.setdefault(gid, {"active": 0.0, "reply": 0.0})
-    if wait <= 0:
-        mode["reply"] = time.monotonic()
-        return 0
-    now = time.monotonic()
-    left = int(mode["reply"] + wait - now) + 1
-    if left > 0 and now < mode["reply"] + wait:
-        return left
-    mode["reply"] = now
     return 0
 
 
@@ -244,8 +243,83 @@ def _group_mode_active(gid: str) -> bool:
 
 def _touch_group(gid: str) -> None:
     """刷新群对话模式的活跃时间（进入 / 有人说话时调用）。"""
-    mode = _GROUP_MODE.setdefault(gid, {"active": 0.0, "reply": 0.0})
+    mode = _GROUP_MODE.setdefault(gid, {"active": 0.0})
     mode["active"] = time.monotonic()
+
+
+# --------------------------------------------------------------------------- #
+# 群自动回复「合并窗口」：窗口内到达的多条消息合并成一轮回复（不丢消息、不刷屏）
+# --------------------------------------------------------------------------- #
+def _buffer_add(gid: str, uid: str, name: str, text: str) -> None:
+    """把一条待回复消息并入本群的合并窗口（未开窗则开窗）。"""
+    buf = _GROUP_BUFFER.setdefault(gid, {"items": [], "task": None})
+    buf["items"].append((uid, name, text))
+    task = buf.get("task")
+    if task is None or task.done():
+        buf["task"] = asyncio.create_task(_flush_group_later(gid))
+
+
+async def _flush_group_later(gid: str) -> None:
+    """等合并窗口结束后统一回复本群这一批消息。"""
+    window = int(feature.cfg("group_cooldown", 3) or 0)
+    try:
+        await asyncio.sleep(max(0, window))
+        await _flush_group(gid)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 后台回复失败不能炸循环
+        feature.logger.opt(exception=exc).warning(f"群 {gid} 合并回复失败")
+
+
+async def _flush_group(gid: str) -> None:
+    """把缓冲区里的多条消息合并成一轮，调用 LLM 并发送一条回复。"""
+    buf = _GROUP_BUFFER.pop(gid, None)
+    if not buf or not buf.get("items"):
+        return
+    items: list[tuple[str, str, str]] = list(buf["items"])
+    last_uid, last_name, last_text = items[-1]
+    preset = await _preset_for("group", gid)
+    hist_block = await _chatlog_history_block(gid, last_uid, last_text)
+    lines = [f"{name}（QQ {uid}）: {text}" for uid, name, text in items]
+    merged = "\n".join(lines)
+    content = f"{hist_block}\n\n【本轮要回复的消息】\n{merged}" if hist_block else merged
+    try:
+        reply = await feature.llm.ask(
+            content,
+            scope="group",
+            scope_id=gid,
+            preset=preset,
+            extra={"_sender_id": last_uid, "_sender_name": last_name},
+        )
+    except LLMError as exc:
+        feature.logger.warning(f"群 {gid} 合并回复失败：{exc}")
+        return
+    await _send_group_text(gid, reply)
+
+
+async def _send_group_text(gid: str, text: str) -> None:
+    """后台任务里往群里发文本（带截断/渲染），发送前走输出守卫。"""
+    from nonebot import get_bot
+
+    text = (text or "").strip() or "（AI 这次什么都没说…）"
+    limit = int(feature.cfg("max_chars", 1200) or 0)
+    if limit > 0 and len(text) > limit:
+        text = text[:limit] + "…"
+    try:
+        bot = get_bot()
+    except Exception as exc:  # noqa: BLE001 - bot 未就绪
+        feature.logger.opt(exception=exc).warning(f"群 {gid} 发送失败：bot 未就绪")
+        return
+    if feature.cfg("render", False):
+        try:
+            from src.core.render import render_text
+
+            png = await render_text(text, header=feature.display_name)
+            await bot.send_group_msg(group_id=int(gid), message=MessageSegment.image(png))
+            return
+        except Exception as exc:  # noqa: BLE001 - 渲染失败退回纯文本
+            feature.logger.opt(exception=exc).warning("渲染失败，退回纯文本发送")
+    await bot.send_group_msg(group_id=int(gid), message=text)
 
 
 def _mute_hit(text: str) -> bool:
@@ -336,20 +410,15 @@ async def _handle_group_chat(event: GroupMessageEvent) -> None:
         _touch_group(gid)
         how = "艾特" if to_me else "昵称"
         feature.logger.info(f"群 {gid} 的对话模式已开启/续期（{how}触发）")
-        left = _group_cooldown_left(gid)
-        if left:
-            await group_chat.finish(f"在啦在啦～（{left} 秒后再找我哦）")
-        await _group_talk(event, gid, text, triggered=True)
+        _buffer_add(gid, _need_id(event), _nickname(event), text)
         return
 
     # ② 未触发：只有对话模式有效期内才自动接话
     if not _group_mode_active(gid):
         return
     _touch_group(gid)
-    left = _group_cooldown_left(gid)
-    if left:
-        return  # 冷却中，不刷屏
-    await _group_talk(event, gid, text, triggered=False)
+    # 内容回复一律走「合并窗口」：窗口内的多条消息合并成一轮回复，绝不丢消息
+    _buffer_add(gid, _need_id(event), _nickname(event), text)
 
 
 def _format_speaker(event: GroupMessageEvent, text: str) -> str:
@@ -369,22 +438,21 @@ async def _group_talk(event: GroupMessageEvent, gid: str, text: str, *, triggere
             await group_chat.finish("在的呀，想聊什么？")
         return
     preset = await _preset_for("group", gid)
-    # 群上下文直接从 chat_message（聊天流水）读，不再维护内存缓存
-    hist_block = await _chatlog_history_block(gid)
-    content = (
-        f"{hist_block}\n\n【当前消息】{_format_speaker(event, text)}"
-        if hist_block
-        else text
-    )
-    # 通过 extra 内部键把「当前发言者 QQ」传给框架（用于注入其个人记忆）
     sender_id = _need_id(event)
+    sender_name = _nickname(event)
+    # 群上下文直接从 chat_message（聊天流水）读，不再维护内存缓存
+    hist_block = await _chatlog_history_block(gid, sender_id, text)
+    # 当前消息显式带上「昵称（QQ）」：QQ 号是唯一身份标识，昵称仅作展示
+    current = f"{sender_name}（QQ {sender_id}）: {text}"
+    content = f"{hist_block}\n\n【当前消息】{current}" if hist_block else current
+    # 通过 extra 内部键把「当前发言者 QQ / 昵称」传给框架（身份锚 + 个人档案注入）
     try:
         reply = await feature.llm.ask(
             content,
             scope="group",
             scope_id=gid,
             preset=preset,
-            extra={"_sender_id": sender_id},
+            extra={"_sender_id": sender_id, "_sender_name": sender_name},
         )
     except LLMError as exc:
         feature.logger.warning(f"群 {gid} 对话失败：{exc}")
@@ -393,22 +461,34 @@ async def _group_talk(event: GroupMessageEvent, gid: str, text: str, *, triggere
     await _reply(reply, matcher=group_chat)
 
 
-async def _chatlog_history_block(gid: str) -> str:
-    """从聊天流水（chat_message）读最近 N 条群消息，拼成氛围提示。"""
+async def _chatlog_history_block(gid: str, current_user_id: str, current_text: str) -> str:
+    """从聊天流水（chat_message）读最近 N 条群消息，拼成氛围提示。
+
+    自动剔除「当前这条」（event_preprocessor 已把它写进流水，避免重复注入）；
+    每行标注 QQ 号，帮助模型把内容和发言人对应起来。
+    """
     from src.core import chatlog
 
     limit = int(feature.cfg("group_history", 10) or 0)
     if limit <= 0:
         return ""
     try:
-        msgs = await chatlog.recent_messages(gid, limit=limit)
+        msgs = await chatlog.recent_messages(gid, limit=limit + 1)
     except Exception as exc:  # noqa: BLE001 - 读历史失败不影响回复
         feature.logger.opt(exception=exc).warning(f"读群 {gid} 聊天流水失败")
         return ""
     if not msgs:
         return ""
+    # 剔除当前这条（按 QQ + 文本精确匹配末尾一条）
+    last = msgs[-1]
+    if (
+        str(last.get("user_id") or "") == current_user_id
+        and (last.get("content") or "").strip() == current_text.strip()
+    ):
+        msgs = msgs[:-1]
+    msgs = msgs[-limit:]
     lines = [
-        f"{m.get('nickname') or m.get('user_id')}：{m.get('content')}"
+        f"{m.get('nickname') or m.get('user_id')}（QQ {m.get('user_id')}）：{m.get('content')}"
         for m in msgs
         if not m.get("is_bot")
     ]
@@ -592,4 +672,10 @@ async def _on_load() -> None:
 async def _on_unload() -> None:
     _COOLDOWN.clear()
     _GROUP_MODE.clear()
+    # 取消所有还在计时的合并窗口，避免任务泄漏
+    for buf in _GROUP_BUFFER.values():
+        task = buf.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+    _GROUP_BUFFER.clear()
     feature.logger.info("对话插件已卸载")

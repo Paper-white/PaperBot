@@ -17,11 +17,13 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -200,6 +202,12 @@ LLM_PRESET_MANUAL = "manual"
 # 关键信息来源（LLM 自动提炼 / 人工维护）
 LLM_FACT_AUTO = "auto"
 LLM_FACT_MANUAL = "manual"
+
+# LLM 记忆来源作用域（决定该条事实在哪些窗口可见）
+FACT_SCOPE_GLOBAL = "global"    # 通用：任何窗口可见（人工手写默认）
+FACT_SCOPE_GROUP = "group"      # 仅指定群可见（scope_id = 群号）
+FACT_SCOPE_PRIVATE = "private"  # 仅私聊可见（scope_id 恒为 ""）
+FACT_SCOPES = (FACT_SCOPE_GLOBAL, FACT_SCOPE_GROUP, FACT_SCOPE_PRIVATE)
 
 # 消息类型（聊天流水表）
 CHAT_TYPE_GROUP = "group"
@@ -397,23 +405,43 @@ class LlmGroupProfile(Base):
 class LlmUserFact(Base):
     """用户关键信息（可枚举的事实条目，例：昵称 / 喜好 / 忌口）。
 
-    `(user_id, fact_key)` 唯一；`source=auto` 表示由 LLM 自动提炼，
-    `source=manual` 表示人工在 WebUI 里写的（自动提炼不会覆盖人工条目）。
+    `(user_id, fact_key, scope_type, scope_id)` 唯一；`source=auto` 表示由 LLM
+    自动提炼，`source=manual` 表示人工手写（自动提炼不会覆盖同 scope 的人工条目）。
+    `scope_type/scope_id` 决定该条事实在哪些窗口可见（见 FACT_SCOPE_* 常量）。
+
+    唯一键用**具名唯一索引**而非 `UniqueConstraint`：SQLite 下命名 UniqueConstraint
+    会退化成 `sqlite_autoindex_*`（名字不可反射），导致迁移无法按名探测；用同名
+    unique Index 则名字可见，唯一性语义完全等价。
     """
 
     __tablename__ = "llm_user_fact"
     __table_args__ = (
-        UniqueConstraint("user_id", "fact_key", name="uq_llm_fact"),
+        Index(
+            "uq_llm_fact_scope",
+            "user_id",
+            "fact_key",
+            "scope_type",
+            "scope_id",
+            unique=True,
+        ),
+        Index("ix_llm_user_fact_user_scope", "user_id", "scope_type", "scope_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String(64), index=True)
-    fact_key: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    fact_key: Mapped[str] = mapped_column(String(64))
     fact_value: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(16), default=LLM_FACT_AUTO)
+    scope_type: Mapped[str] = mapped_column(
+        String(16), default=FACT_SCOPE_PRIVATE, server_default=text("'private'")
+    )
+    scope_id: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
-        return f"<LlmUserFact {self.user_id} {self.fact_key}={self.fact_value[:20]!r}>"
+        return (
+            f"<LlmUserFact {self.user_id} {self.fact_key}={self.fact_value[:20]!r} "
+            f"scope={self.scope_type}:{self.scope_id}>"
+        )

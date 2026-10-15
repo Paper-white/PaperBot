@@ -42,7 +42,16 @@
 2. **WebUI 打磨**：前端交互细节、更多 API、按需补设置项
 3. **AI 工具调用（function calling）**：让 AI 自己查群聊上下文 / 用户画像（想法池）
 4. **长期记忆与召回优化**：对标两 AstrBot 记忆插件（代码闸门 / 分槽保底 / 软衰减 / 向量检索等）
-   → [`07-memory-optimization.md`](07-memory-optimization.md)（规划中）
+   → [`07-memory-optimization.md`](07-memory-optimization.md)（P0 已落地：跨窗口隔离 / 摘要补注入 / 水位线修复；待做：代码闸门等）
+
+## 已完成（2026-10-15）
+
+- **AI 认人修复**：群聊以 QQ 号做唯一身份锚（`_build_sender_anchor`），昵称仅作展示
+- **跨窗口记忆隔离**：`llm_user_fact` 加 `scope_type/scope_id`，群聊只注入「通用 + 本群」，
+  印象降级为私聊专属；开关 `LLM_MEMORY_SCOPE_ISOLATION` → 消除「私聊内容经群聊泄露」
+- **上下文真 bug 修复**：私聊摘要补注入（原静默失忆）、`summarize_user` 水位线恒 0、注入加包围标记/冲突优先级
+- **群聊回复合并窗口**：冷却由「丢消息」改「窗口合并成一轮」（5 条 → 1 次调用，不丢内容）
+- 清理废弃 `refresh_profile`；DB 幂等迁移（旧表保留 `llm_user_fact_legacy`）
 
 ## 维护约定
 

@@ -98,6 +98,7 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MEMORY_ENABLE` | `true` | 是否启用长期记忆（印象 + 关键信息 + 群记忆） |
 | `LLM_CONTEXT_ROUNDS` | `10` | 上下文保留轮数（`0` = 不带历史） |
 | `LLM_MAX_FACTS` | `30` | 注入提示词的关键信息条数上限 |
+| `LLM_MEMORY_SCOPE_ISOLATION` | `true` | 记忆跨窗口隔离：群聊只注入「通用 + 本群」信息，不再看到私聊/别群内容；`false` = 退回旧的全量注入 |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：
 > 记忆自动生成改由「定时总结调度器」负责（见下面 1.7 小节）。

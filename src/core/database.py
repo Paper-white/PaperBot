@@ -113,14 +113,53 @@ async def _add_missing_columns(conn) -> list[str]:  # noqa: ANN001 - AsyncConnec
     return added
 
 
+async def _migrate_llm_fact_scope(conn) -> bool:  # noqa: ANN001 - AsyncConnection
+    """把 llm_user_fact 的唯一键从 (user_id, fact_key) 重建为含 scope 的四元组。
+
+    SQLite 的 UNIQUE 约束随建表生成、无法直接 DROP，只能整表重建（幂等：
+    已存在 `uq_llm_fact_scope` 则跳过）。旧表保留为 `llm_user_fact_legacy` 以备回滚。
+    """
+    exists = (
+        await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_user_fact'"
+        )
+    ).fetchall()
+    if not exists:
+        return False
+    idx = {
+        r[1]
+        for r in (await conn.exec_driver_sql("PRAGMA index_list('llm_user_fact')")).fetchall()
+    }
+    if "uq_llm_fact_scope" in idx:
+        return False
+
+    await conn.exec_driver_sql("ALTER TABLE llm_user_fact RENAME TO llm_user_fact_legacy")
+    # 旧名索引可能随表保留，删除以免与新表同名索引冲突（自动索引 sqlite_autoindex_* 不动）
+    for old in ("ix_llm_user_fact_user_id", "ix_llm_user_fact_fact_key", "uq_llm_fact"):
+        await conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{old}"')
+    await conn.run_sync(lambda c: Base.metadata.tables["llm_user_fact"].create(c))
+    await conn.exec_driver_sql(
+        "INSERT INTO llm_user_fact "
+        "(id, user_id, fact_key, fact_value, source, scope_type, scope_id, updated_at) "
+        "SELECT id, user_id, fact_key, fact_value, source, "
+        "COALESCE(scope_type, 'private'), COALESCE(scope_id, ''), "
+        "COALESCE(updated_at, CURRENT_TIMESTAMP) "
+        "FROM llm_user_fact_legacy"
+    )
+    return True
+
+
 async def init_db() -> None:
     """建立连接并创建所有表（若不存在），并补齐旧表缺失的新列。"""
     engine, _ = _ensure_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         added = await _add_missing_columns(conn)
+        migrated = await _migrate_llm_fact_scope(conn)
     if added:
         logger.info(f"数据库结构已自动补齐：{', '.join(added)}")
+    if migrated:
+        logger.info("llm_user_fact 唯一键已重建（含 scope），旧表保留为 llm_user_fact_legacy")
 
 
 @asynccontextmanager

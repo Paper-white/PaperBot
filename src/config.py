@@ -133,6 +133,8 @@ class Settings(BaseSettings):
     llm_impression_every: int = 10
     # 注入 prompt 的关键信息条数上限
     llm_max_facts: int = 30
+    # 记忆跨窗口隔离：事实按来源（私聊/某群）过滤注入，群聊不再看到私聊/别群内容
+    llm_memory_scope_isolation: bool = True
 
     # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
     # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。

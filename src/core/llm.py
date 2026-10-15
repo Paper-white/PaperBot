@@ -34,12 +34,17 @@ from typing import Any, AsyncIterator, Callable, Iterable, Optional, Sequence
 
 import httpx
 import nonebot
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from src.config import settings
 from src.core.database import get_session
 from src.core.textutil import CST, fmt_dt  # noqa: F401 - 对外兼容导出
 from src.core.models import (
+    CHAT_TYPE_GROUP,
+    FACT_SCOPE_GLOBAL,
+    FACT_SCOPE_GROUP,
+    FACT_SCOPE_PRIVATE,
+    FACT_SCOPES,
     LLM_FACT_AUTO,
     LLM_FACT_MANUAL,
     LLM_PRESET_BUILTIN,
@@ -1443,6 +1448,45 @@ _IMPRESSION_PROMPT = """你是一个用户信息抽取助手。下面是一位�
 {convo}"""
 
 
+_GROUP_USER_FACT_PROMPT = """你是一个信息抽取助手。下面是某用户在一个 QQ 群里的发言，
+以及此前已记录过的、关于该用户的群内可见信息。请只更新「关于这位用户本人」的事实。
+
+只输出**严格 JSON**（不要代码块、不要解释），格式：
+{{"facts": [{{"key": "简短键名", "value": "具体内容"}}]}}
+
+要求：
+- 只写这些发言里能确认的、关于该用户本人的信息（称呼、偏好、身份、习惯、禁忌等）；
+- 不要把「群聊氛围/别人的事/临时话题」写成该用户的事实；
+- 不要编造；没有新信息时返回空数组；最多 6 条；
+- 不要记录密码、密钥等隐私敏感信息。
+
+【旧关键信息】{old_facts}
+【该用户在本群的发言】
+{convo}"""
+
+
+def _group_by_scope(msgs: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    """把消息按来源分组：群消息 → (group, 群号)；私聊 → (private, "")。"""
+    out: dict[tuple[str, str], list[dict]] = {}
+    for m in msgs:
+        if m.get("message_type") == CHAT_TYPE_GROUP:
+            key = (FACT_SCOPE_GROUP, str(m.get("group_id") or ""))
+        else:
+            key = (FACT_SCOPE_PRIVATE, "")
+        out.setdefault(key, []).append(m)
+    return out
+
+
+def _facts_text(facts: list[dict]) -> str:
+    return "\n".join(f"- {f.get('key')}：{f.get('value', '')}" for f in facts) or "（暂无）"
+
+
+def _convo_lines(msgs: list[dict]) -> str:
+    return "\n".join(
+        f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}" for m in msgs
+    )
+
+
 def _extract_json(text: str) -> dict:
     """从模型输出里抠出第一个合法 JSON 对象（容忍代码块 / 前后废话）。"""
     raw = (text or "").strip()
@@ -1465,8 +1509,19 @@ def _extract_json(text: str) -> dict:
         return {}
 
 
-async def get_profile(user_id: str | int) -> dict:
-    """取用户长期记忆：印象 + 关键信息列表。"""
+async def get_profile(
+    user_id: str | int,
+    *,
+    scope_type: Optional[str] = None,
+    scope_id: Optional[str] = None,
+) -> dict:
+    """取用户长期记忆：印象 + 关键信息列表。
+
+    `scope_type` 决定事实的可见窗口（跨窗口隔离）：
+    - `FACT_SCOPE_PRIVATE` → 只取 `global + private`（私聊用）；
+    - `FACT_SCOPE_GROUP`   → 取 `global + 本群 group`（群聊用）；
+    - `None`               → 不过滤（全量，WebUI 管理页用）。
+    """
     uid = str(user_id)
     async with get_session(readonly=True) as session:
         row = (
@@ -1474,14 +1529,21 @@ async def get_profile(user_id: str | int) -> dict:
                 select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
             )
         ).scalar_one_or_none()
-        facts = (
-            (
-                await session.execute(
-                    select(LlmUserFact)
-                    .where(LlmUserFact.user_id == uid)
-                    .order_by(LlmUserFact.updated_at.desc())
+        stmt = select(LlmUserFact).where(LlmUserFact.user_id == uid)
+        if scope_type == FACT_SCOPE_PRIVATE:
+            stmt = stmt.where(LlmUserFact.scope_type.in_((FACT_SCOPE_GLOBAL, FACT_SCOPE_PRIVATE)))
+        elif scope_type == FACT_SCOPE_GROUP:
+            stmt = stmt.where(
+                or_(
+                    LlmUserFact.scope_type == FACT_SCOPE_GLOBAL,
+                    and_(
+                        LlmUserFact.scope_type == FACT_SCOPE_GROUP,
+                        LlmUserFact.scope_id == str(scope_id or ""),
+                    ),
                 )
             )
+        facts = (
+            (await session.execute(stmt.order_by(LlmUserFact.updated_at.desc())))
             .scalars()
             .all()
         )
@@ -1489,6 +1551,7 @@ async def get_profile(user_id: str | int) -> dict:
         "user_id": uid,
         "impression": row.impression if row else "",
         "message_count": row.message_count if row else 0,
+        "last_msg_id": row.last_msg_id if row else 0,
         "impression_at": (
             fmt_dt(row.impression_at)
             if row and row.impression_at
@@ -1499,6 +1562,8 @@ async def get_profile(user_id: str | int) -> dict:
                 "key": f.fact_key,
                 "value": f.fact_value or "",
                 "source": f.source or LLM_FACT_AUTO,
+                "scope_type": f.scope_type or FACT_SCOPE_PRIVATE,
+                "scope_id": f.scope_id or "",
                 "updated_at": (
                     fmt_dt(f.updated_at)
                 ),
@@ -1536,27 +1601,51 @@ async def set_fact(
     value: str,
     *,
     source: str = LLM_FACT_MANUAL,
+    scope_type: str = FACT_SCOPE_GLOBAL,
+    scope_id: str = "",
     overwrite_manual: bool = False,
 ) -> dict:
-    """写入 / 更新一条关键信息（`source=auto` 默认不覆盖人工记录）。"""
+    """写入 / 更新一条关键信息（`source=auto` 默认不覆盖同 scope 的人工记录）。
+
+    `scope_type` 决定该条事实在哪些窗口可见（见 FACT_SCOPE_* 常量）：
+    - `global`（默认）：任何窗口可见（WebUI 手写默认）；
+    - `group`：仅该群可见，`scope_id` 必须为群号；
+    - `private`：仅私聊可见，`scope_id` 恒为 ""。
+    唯一键为 `(user_id, fact_key, scope_type, scope_id)`。
+    """
     uid = str(user_id)
     key = (key or "").strip()
     if not key:
         raise LLMError("关键信息的 key 不能为空")
     if len(key) > 64:
         raise LLMError("关键信息的 key 太长（最多 64 字符）")
+    if scope_type not in FACT_SCOPES:
+        raise LLMError(f"记忆作用域非法：{scope_type}（可选 {', '.join(FACT_SCOPES)}）")
+    if scope_type == FACT_SCOPE_GROUP:
+        scope_id = (scope_id or "").strip()
+        if not scope_id:
+            raise LLMError("群作用域的关键信息必须给 scope_id（群号）")
+    else:
+        scope_id = ""
     async with get_session() as session:
         row = (
             await session.execute(
                 select(LlmUserFact)
-                .where(LlmUserFact.user_id == uid, LlmUserFact.fact_key == key)
+                .where(
+                    LlmUserFact.user_id == uid,
+                    LlmUserFact.fact_key == key,
+                    LlmUserFact.scope_type == scope_type,
+                    LlmUserFact.scope_id == scope_id,
+                )
                 .limit(1)
             )
         ).scalar_one_or_none()
         if row is not None and row.source == LLM_FACT_MANUAL and source == LLM_FACT_AUTO and not overwrite_manual:
             return await get_profile(uid)
         if row is None:
-            row = LlmUserFact(user_id=uid, fact_key=key)
+            row = LlmUserFact(
+                user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id
+            )
             session.add(row)
         row.fact_value = value or ""
         row.source = source
@@ -1638,15 +1727,48 @@ async def clear_profile(user_id: str | int) -> int:
     return int((facts.rowcount or 0) + (profile.rowcount or 0))
 
 
-def build_memory_block(profile: dict, *, max_facts: Optional[int] = None) -> str:
-    """把长期记忆拼成一段注入 system 的提示词（空白记忆返回空串）。"""
+def _build_sender_anchor(name: str, user_id: str) -> str:
+    """群聊身份锚：以 QQ 号唯一标识当前发言人（昵称可能重名/变更，不可作身份）。"""
+    who = (name or "").strip() or "群成员"
+    return (
+        f"【当前和你说话的人】{who}（QQ：{user_id}）。"
+        "QQ 号才是唯一身份标识：判断「谁在说话」「某句话/某条信息是谁说的」一律以 QQ 号为准；"
+        "昵称仅供参考（可能重名或改过），不要因为昵称相同就把不同人的信息混在一起，"
+        "也不要把别人的信息当成这个人的。"
+    )
+
+
+def _dedup_facts(facts: list[dict]) -> list[dict]:
+    """同一 key 只保留一条：非 global 的 scope 优先（group/private 版覆盖 global 版）。"""
+    ordered = sorted(facts, key=lambda f: 1 if f.get("scope_type") == FACT_SCOPE_GLOBAL else 0)
+    seen: dict[str, dict] = {}
+    for f in ordered:
+        seen[f.get("key")] = f
+    return list(seen.values())
+
+
+def build_memory_block(
+    profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private"
+) -> str:
+    """把长期记忆拼成一段注入 system 的提示词（空白记忆返回空串）。
+
+    `owner` 为空时用「ta」（私聊语义）；群聊应传「昵称（QQ 123）」这类明确归属，
+    让模型知道这段记忆属于谁，避免多说话人场景乱认人。
+
+    `scope` 决定这段记忆在哪个窗口用（跨窗口隔离）：
+    - `"group"`   → **不渲染印象**（印象降级为私聊专属），并声明「别窗口的信息一律不知道」；
+    - `"private"` → 渲染印象 + facts，并声明「别泄漏 ta 在群里说过的话」；
+    - `"all"`     → 关闭隔离时的中性说明（不含隔离边界）。
+    """
     if not profile:
         return ""
+    who = (owner or "").strip() or "ta"
     lines: list[str] = []
     impression = (profile.get("impression") or "").strip()
-    if impression:
-        lines.append(f"【你对 ta 的印象】{impression}")
-    facts = list(profile.get("facts") or [])
+    # 印象降级为私聊专属：群聊窗口不注入
+    if impression and scope != "group":
+        lines.append(f"【你对 {who} 的印象】{impression}")
+    facts = _dedup_facts(list(profile.get("facts") or []))
     limit = settings.llm_max_facts if max_facts is None else max_facts
     if limit and limit > 0:
         facts = facts[:limit]
@@ -1657,105 +1779,30 @@ def build_memory_block(profile: dict, *, max_facts: Optional[int] = None) -> str
         )
     if not lines:
         return ""
+    if scope == "group":
+        head = "【当前发言者在本群可见的信息（仅来自 ta 在本群的发言或通用画像）】"
+        lead = (
+            "严格边界：不要使用、也不要透露 ta 在私聊或其他群说过的话；"
+            "只在别的窗口见过的信息一律当作不知道。"
+        )
+    elif scope == "private":
+        head = "【长期记忆：这是你与对话对象过往积累的信息，仅供理解与个性化参考】"
+        lead = (
+            "以下信息来自与 ta 的私聊或通用画像。"
+            "不要提及 ta 在群里说过的话，除非 ta 本轮自己先提到。"
+        )
+    else:
+        head = "【长期记忆：这是你与对话对象过往积累的信息，仅供理解与个性化参考】"
+        lead = f"以下是你与 {who} 过往对话中积累的长期记忆。"
     return (
-        "以下是你与 ta 过往对话中积累的长期记忆，"
-        "只在自然合适时使用，不要逐条复述、不要暴露你在「读取记忆」：\n" + "\n".join(lines)
+        head + "\n"
+        "使用规则：只在自然合适时使用；不要逐条复述；不要暴露你在「读取记忆」；"
+        "如果它与当前对话的内容冲突，一律以当前对话为准。\n"
+        + lead + "\n"
+        "--- 记忆开始 ---\n"
+        + "\n".join(lines)
+        + "\n--- 记忆结束 ---"
     )
-
-
-async def refresh_profile(
-    user_id: str | int,
-    *,
-    provider: Optional[str] = None,
-    rounds: int = 20,
-) -> dict:
-    """提炼用户印象 + 关键信息（失败只记日志，绝不影响聊天主流程）。"""
-    uid = str(user_id)
-    try:
-        cfg = await resolve_provider(provider)
-        async with get_session(readonly=True) as session:
-            sessions = (
-                (
-                    await session.execute(
-                        select(LlmSession).where(
-                            LlmSession.scope_type == LLM_SCOPE_USER,
-                            LlmSession.scope_id == uid,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            session_ids = [s.id for s in sessions]
-            total_users = sum((s.user_message_count or 0) for s in sessions)
-            profile_row = (
-                await session.execute(
-                    select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
-                )
-            ).scalar_one_or_none()
-            old_impression = profile_row.impression if profile_row else ""
-            fact_rows = (
-                (await session.execute(select(LlmUserFact).where(LlmUserFact.user_id == uid)))
-                .scalars()
-                .all()
-            )
-            old_facts = [(f.fact_key, f.fact_value or "", f.source or "") for f in fact_rows]
-            msgs = []
-            if session_ids:
-                rows = (
-                    (
-                        await session.execute(
-                            select(LlmMessage)
-                            .where(
-                                LlmMessage.session_id.in_(session_ids),
-                                LlmMessage.role.in_(("user", "assistant")),
-                            )
-                            .order_by(LlmMessage.id.desc())
-                            .limit(max(2, rounds) * 2)
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                msgs = list(reversed(rows))
-        if not msgs:
-            return {"ok": False, "reason": "没有可用于提炼的对话"}
-        convo = "\n".join(
-            f"{'用户' if m.role == 'user' else '助手'}：{(m.content or '')[:400]}" for m in msgs
-        )
-        facts_text = "\n".join(f"- {k}：{v}" for k, v, _ in old_facts) if old_facts else "（暂无）"
-        prompt = _IMPRESSION_PROMPT.format(
-            old=old_impression or "（暂无）", old_facts=facts_text, convo=convo
-        )
-        res = await client().complete(
-            cfg,
-            [{"role": "user", "content": prompt}],
-            {"temperature": 0.2, "max_tokens": 700},
-        )
-        data = _extract_json(res.text)
-        impression = str(data.get("impression") or "").strip() or old_impression
-        await set_impression(uid, impression, count=total_users)
-        manual_keys = {k for k, _, src in old_facts if src == LLM_FACT_MANUAL}
-        raw_facts = data.get("facts")
-        if isinstance(raw_facts, list):
-            for item in raw_facts:
-                if not isinstance(item, dict):
-                    continue
-                key = str(item.get("key") or "").strip()
-                value = str(item.get("value") or "").strip()
-                if not key or not value or key in manual_keys:
-                    continue
-                await set_fact(uid, key, value, source=LLM_FACT_AUTO)
-                if len(manual_keys) >= settings.llm_max_facts:
-                    break
-                manual_keys.add(key)
-        profile = await get_profile(uid)
-        profile.update({"ok": True, "model": res.model, "latency_ms": res.latency_ms})
-        logger.debug(f"已更新用户 {uid} 的长期记忆（素材 {len(msgs)} 条）")
-        return profile
-    except Exception as exc:  # noqa: BLE001 - 提炼失败不能影响聊天
-        logger.warning(f"提炼用户 {uid} 的印象失败：{exc}")
-        return {"ok": False, "error": str(exc)}
 
 
 # ============================== 群记忆 ==============================
@@ -1813,8 +1860,10 @@ def build_group_memory_block(profile: dict) -> str:
     if not memory:
         return ""
     return (
-        "以下是这个群过往聊天积累的共同记忆（话题/群梗/约定），"
-        "只在自然合适时使用，不要逐条复述、不要暴露你在「读取记忆」：\n" + memory
+        "【群共同记忆：这个群过往聊天积累的话题/群梗/约定，仅供理解氛围参考】\n"
+        "使用规则：只在自然合适时使用；不要逐条复述；不要暴露你在「读取记忆」；"
+        "如果它与当前对话的内容冲突，一律以当前对话为准。\n"
+        "--- 群记忆开始 ---\n" + memory + "\n--- 群记忆结束 ---"
     )
 
 
@@ -1874,11 +1923,65 @@ async def _summary_cfg() -> ProviderConfig:
     return cfg
 
 
+async def _write_facts(uid: str, raw_facts, *, scope_type: str, scope_id: str) -> None:
+    """写入一批自动提炼的事实（auto 不覆盖同 scope 的 manual）。"""
+    if not isinstance(raw_facts, list):
+        return
+    existing = await get_profile(uid, scope_type=scope_type, scope_id=scope_id)
+    manual_keys = {f.get("key") for f in (existing.get("facts") or []) if f.get("source") == LLM_FACT_MANUAL}
+    for item in raw_facts:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not key or not value or key in manual_keys:
+            continue
+        await set_fact(uid, key, value, source=LLM_FACT_AUTO, scope_type=scope_type, scope_id=scope_id)
+
+
+async def _summarize_private(uid: str, batch: list[dict], cfg, *, fact_scope: str = FACT_SCOPE_PRIVATE) -> None:
+    """私聊批次：更新印象 + 写 fact_scope 作用域的事实。"""
+    prof = await get_profile(uid, scope_type=None)  # 取全量旧值作上下文
+    old = prof.get("impression") or ""
+    facts_text = _facts_text(prof.get("facts") or [])
+    prompt = _IMPRESSION_PROMPT.format(old=old or "（暂无）", old_facts=facts_text, convo=_convo_lines(batch))
+    res = await client().complete(cfg, [{"role": "user", "content": prompt}], {"temperature": 0.2, "max_tokens": 700})
+    data = _extract_json(res.text)
+    impression = str(data.get("impression") or "").strip() or old
+    await set_impression(uid, impression, count=len(batch))
+    await _write_facts(uid, data.get("facts"), scope_type=fact_scope, scope_id="")
+
+
+async def _summarize_group_facts(uid: str, gid: str, batch: list[dict], cfg) -> None:
+    """群批次：只写该群的 group 作用域事实，**不写印象**。"""
+    prof = await get_profile(uid, scope_type=FACT_SCOPE_GROUP, scope_id=gid)
+    prompt = _GROUP_USER_FACT_PROMPT.format(
+        old_facts=_facts_text(prof.get("facts") or []), convo=_convo_lines(batch)
+    )
+    res = await client().complete(cfg, [{"role": "user", "content": prompt}], {"temperature": 0.2, "max_tokens": 700})
+    data = _extract_json(res.text)
+    await _write_facts(uid, data.get("facts"), scope_type=FACT_SCOPE_GROUP, scope_id=gid)
+
+
+async def _advance_user_watermark(uid: str, msg_id: int) -> None:
+    """推进个人记忆水位线（本轮最大 chat_message.id）。"""
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            row.last_msg_id = int(msg_id)
+            await session.commit()
+
+
 async def summarize_user(user_id: str | int) -> dict:
-    """从聊天流水里提炼某用户的个人记忆（印象 + 关键信息，增量）。
+    """从聊天流水增量提炼某用户的个人记忆（按来源 scope 分离）。
 
     素材来自 `chat_message`（该用户所有发言），水位线 `llm_user_profile.last_msg_id`。
-    失败只记日志，不推进水位线（下次重试）。
+    开启跨窗口隔离时，消息按来源拆成「私聊 / 各群」批次分别提炼：私聊批次更新印象 +
+    private 事实，群批次只写该群的 group 事实（不写印象）。失败只记日志，不推进水位线。
     """
     from src.core import chatlog
 
@@ -1893,52 +1996,23 @@ async def summarize_user(user_id: str | int) -> dict:
         msgs = [m for m in msgs if not m.get("is_bot")]
         if not msgs:
             return {"ok": True, "reason": "没有增量", "user_id": uid}
-        old_impression = profile_row.get("impression") or ""
-        old_facts = profile_row.get("facts") or []
-        facts_text = (
-            "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in old_facts)
-            if old_facts
-            else "（暂无）"
-        )
-        convo = "\n".join(
-            f"{m.get('nickname') or m.get('user_id')}：{(m.get('content') or '')[:300]}"
-            for m in msgs
-        )
-        prompt = _IMPRESSION_PROMPT.format(
-            old=old_impression or "（暂无）", old_facts=facts_text, convo=convo
-        )
-        res = await client().complete(
-            cfg,
-            [{"role": "user", "content": prompt}],
-            {"temperature": 0.2, "max_tokens": 700},
-        )
-        data = _extract_json(res.text)
-        impression = str(data.get("impression") or "").strip() or old_impression
-        await set_impression(uid, impression)
-        manual_keys = {f.get("key") for f in old_facts if f.get("source") == LLM_FACT_MANUAL}
-        raw_facts = data.get("facts")
-        if isinstance(raw_facts, list):
-            for item in raw_facts:
-                if not isinstance(item, dict):
+
+        if settings.llm_memory_scope_isolation:
+            for (stype, sid), batch in _group_by_scope(msgs).items():
+                if len(batch) < 3:      # 每个 scope 至少 3 条才提炼，控制调用量
                     continue
-                key = str(item.get("key") or "").strip()
-                value = str(item.get("value") or "").strip()
-                if not key or not value or key in manual_keys:
-                    continue
-                await set_fact(uid, key, value, source=LLM_FACT_AUTO)
-        # 推进水位线（以本次取到的最后一条为准）
-        await set_impression(uid, impression, count=len(msgs))
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
-                )
-            ).scalar_one_or_none()
-            if row is not None:
-                row.last_msg_id = int(msgs[-1]["id"])
-                await session.commit()
+                if stype == FACT_SCOPE_PRIVATE:
+                    await _summarize_private(uid, batch, cfg)
+                else:
+                    await _summarize_group_facts(uid, sid, batch, cfg)
+        else:
+            # 关闭隔离：退回旧行为（印象 + 全量通用事实）
+            await _summarize_private(uid, msgs, cfg, fact_scope=FACT_SCOPE_GLOBAL)
+
+        # 推进水位线（本轮最大 id；不足 3 条的小批次视为已消费）
+        await _advance_user_watermark(uid, int(msgs[-1]["id"]))
         logger.info(f"已提炼用户 {uid} 的个人记忆（增量 {len(msgs)} 条）")
-        return {"ok": True, "user_id": uid, "count": len(msgs), "model": res.model}
+        return {"ok": True, "user_id": uid, "count": len(msgs), "model": None}
     except Exception as exc:  # noqa: BLE001 - 提炼失败不能影响聊天
         logger.warning(f"提炼用户 {uid} 的个人记忆失败：{exc}")
         return {"ok": False, "error": str(exc)}
@@ -2138,23 +2212,50 @@ async def _build_request(
     use_memory = settings.llm_memory_enable if memory is None else bool(memory)
     if scope_type == LLM_SCOPE_USER and scope_key and use_memory:
         # 个人对话：注入个人记忆（印象 + 关键信息）
-        block = build_memory_block(await get_profile(scope_key))
+        if settings.llm_memory_scope_isolation:
+            profile = await get_profile(scope_key, scope_type=FACT_SCOPE_PRIVATE)
+            block = build_memory_block(profile, scope="private")
+        else:
+            block = build_memory_block(await get_profile(scope_key), scope="all")
         if block:
             sys_parts.append(block)
-    elif scope_type == LLM_SCOPE_GROUP and scope_key and use_memory:
-        # 群聊：注入群记忆 + 当前发言者的个人记忆（由 paperbot_chat 通过 sender_id 传入）
-        group_block = build_group_memory_block(await get_group_profile(scope_key))
-        if group_block:
-            sys_parts.append(group_block)
-        sender_id = (extra or {}).get("_sender_id") if extra else None
-        if sender_id:
-            sender_block = build_memory_block(await get_profile(str(sender_id)))
-            if sender_block:
-                sys_parts.append(f"【当前发言者的个人记忆】\n{sender_block}")
-        # 会话压缩摘要（若之前压缩过，补充进 system）
-        info = await find_session(LLM_SCOPE_GROUP, scope_key, plugin or "")
+        # 会话压缩摘要：超阈值后旧原文被物理删除，摘要写进了 llm_session.summary，
+        # 这里必须补注入，否则私聊历史会静默丢失。
+        info = await find_session(LLM_SCOPE_USER, scope_key, plugin or "")
         if info and (info.get("summary") or "").strip():
             sys_parts.append(f"【更早的对话摘要】\n{info['summary']}")
+    elif scope_type == LLM_SCOPE_GROUP and scope_key:
+        # 群聊：先钉死「当前发言人是谁」（QQ 号为准），再注入群记忆 + 该发言者个人档案
+        sender_id = str((extra or {}).get("_sender_id") or "").strip() if extra else ""
+        sender_name = str((extra or {}).get("_sender_name") or "").strip() if extra else ""
+        if sender_id:
+            # 身份锚不依赖记忆开关：认人是群聊的基础能力
+            sys_parts.append(_build_sender_anchor(sender_name, sender_id))
+        if use_memory:
+            group_block = build_group_memory_block(await get_group_profile(scope_key))
+            if group_block:
+                sys_parts.append(group_block)
+            if sender_id:
+                owner = f"{sender_name}（QQ {sender_id}）" if sender_name else f"QQ {sender_id}"
+                if settings.llm_memory_scope_isolation:
+                    # 只取该发言者「通用 + 本群」可见的信息，绝不带出私聊/别群内容
+                    sender_profile = await get_profile(
+                        sender_id, scope_type=FACT_SCOPE_GROUP, scope_id=scope_key
+                    )
+                    sender_block = build_memory_block(
+                        sender_profile, owner=owner, scope="group"
+                    )
+                else:
+                    sender_block = build_memory_block(
+                        await get_profile(sender_id), owner=owner, scope="all"
+                    )
+                if sender_block:
+                    # build_memory_block(scope="group") 自带标题与边界声明，直接追加即可
+                    sys_parts.append(sender_block)
+            # 会话压缩摘要（若之前压缩过，补充进 system）
+            info = await find_session(LLM_SCOPE_GROUP, scope_key, plugin or "")
+            if info and (info.get("summary") or "").strip():
+                sys_parts.append(f"【更早的对话摘要】\n{info['summary']}")
 
     convo: list[dict] = []
     for msg in conv:
@@ -2426,9 +2527,6 @@ class PluginLLM:
 
     async def set_impression(self, user_id: str | int, text: str) -> dict:
         return await set_impression(user_id, text)
-
-    async def refresh_profile(self, user_id: str | int, **kwargs) -> dict:
-        return await refresh_profile(user_id, **kwargs)
 
     async def clear_memory(self, user_id: str | int) -> int:
         return await clear_profile(user_id)
