@@ -126,12 +126,25 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - [ ] ~~事实抽取代码闸门~~ → **已完成（第二批）**
 
 ### P1（结构性改进）
-- [ ] `llm_user_fact` 改造：受控 key 词表 + 单值改口版本链（`supersedes_id`）
+- [x] **受控 key 词表**（2026-10-15 第三批）：`src/core/fact_keys.py`（14 条规范 key + 别名归一 + 单值/多值标记），
+  auto 未命中即丢弃（`LLM_MEMORY_KEY_EXACT`），manual 只归一不丢弃
+- [ ] **单值改口版本链（`supersedes_id`）**：设计已完成（见下方「改口版本链设计结论」），
+      **按 oracle 建议缓做**（涉及 partial unique index 迁移回归风险，且依赖词表先稳定）
 - [ ] ~~分槽注入~~ → **已完成（第二批）**
 - [ ] ~~压缩窗口与注入窗口对齐~~ → **已完成（第二批）**
 - [ ] ~~facts 库内条数上限~~ → **已完成（第二批）**
 - [ ] **半衰期软衰减 + 复述加固**：设计已完成（见下方 §「衰减设计结论」），**判定为 P2 缓做**
       —— 单机 bot 记忆量小、遗忘压力低，ROI 需长期运行才兑现；字段与 `_fact_score` 排序接口已铺好，随时可接
+
+### 改口版本链设计结论（oracle 评审，未实施）
+- 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空），均可自动补列；
+- 唯一键改 **partial unique index**：`(user_id,fact_key,scope_type,scope_id) WHERE status='active'`
+  （SQLite 支持；当前唯一键本是具名索引，可 DROP+CREATE，无需整表重建）；
+- 改口判定：单值 key 值变化 → 插新行 + 旧行标 superseded + 新行 `supersedes_id=旧行.id`；多值 key 值变化 → 并存 + 值去重；
+- **必同步改**：`_prune_facts` 加 `status='active'` 过滤（否则先删最旧的 superseded 行、断链）、
+  `_migrate_llm_fact_scope` 守卫改为「`uq_llm_fact_scope` **或** `uq_llm_fact_active` 任一存在即已迁移」；
+- 读路径 `get_profile` 只返回 active；「以前说过」v1 仅保留在库、不注入；
+- 开关 `llm_memory_supersede_enable`；**结论：P2 缓做**（低频场景，不修只丢历史、不影响正确性）。
 
 ### 衰减设计结论（oracle 评审，未实施）
 - 字段：`llm_user_fact` 加 `weight`（默认 1.0）/ `last_used_at`（可空）/ `access_count`（默认 0），均可被 `_add_missing_columns` 自动补列；

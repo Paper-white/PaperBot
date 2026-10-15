@@ -247,6 +247,12 @@ enabled: true              # 可选：默认 true
 **库内上限**（`LLM_MAX_FACTS_STORED`，默认 `200`）：单用户单 scope 的自动事实超过上限时，
 按最旧淘汰（**manual 永不淘汰**）。
 
+**受控 key 词表**（`src/core/fact_keys.py`）：自动提炼时的 key 必须命中规范词表
+（称呼/姓名/性别/生日/年龄/职业/学校/所在地/家乡/爱好/擅长/忌口/过敏/承诺），
+别名会自动归一（「住址/居住地/城市」→`所在地`）；未命中词表的自造 key 在
+`LLM_MEMORY_KEY_EXACT=true`（默认）下**直接丢弃**，从根上压住 key 膨胀。
+WebUI 手写（`manual`）只做别名归一、保留原 key 不丢弃。
+
 **定时总结**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
 增量跑一轮：
 

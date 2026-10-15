@@ -365,6 +365,7 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
     print("四、WebUI：用户长期记忆")
     print("=" * 68)
     await llm.set_impression("10001", "喜欢猫的群友")
+    # 受控 key 词表：manual 手写也做别名归一（「城市」→「所在地」）
     await llm.set_fact("10001", "城市", "杭州")
 
     users = (await client.get("/api/llm/users")).json()
@@ -373,7 +374,7 @@ async def main() -> int:  # noqa: C901 - 自检脚本，长一点没关系
 
     d = (await client.get("/api/llm/users/10001")).json()["item"]
     check("GET 用户详情含印象", d.get("impression") == "喜欢猫的群友")
-    check("GET 用户详情含关键信息", d["facts"][0]["key"] == "城市" and d["facts"][0]["value"] == "杭州")
+    check("GET 用户详情含关键信息", d["facts"][0]["key"] == "所在地" and d["facts"][0]["value"] == "杭州")
     check("未知用户返回空记忆", (await client.get("/api/llm/users/99999")).json()["item"]["facts"] == [])
 
     r = await client.put("/api/llm/users/10001/impression", json={"impression": "猫奴一枚"})

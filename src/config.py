@@ -139,6 +139,8 @@ class Settings(BaseSettings):
     llm_memory_scope_isolation: bool = True
     # 记忆注入「分槽保底」：通用画像 / 窗口事实 分槽，每槽至少保留若干条，避免近期事实挤掉长期画像
     llm_memory_slots_enable: bool = True
+    # 受控 key 词表：auto 提炼时未命中词表的自造 key 直接丢弃（False = 放行原样，旧行为）
+    llm_memory_key_exact: bool = True
 
     # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
     # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。

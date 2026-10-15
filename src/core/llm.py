@@ -37,6 +37,7 @@ import nonebot
 from sqlalchemy import and_, func, or_, select
 
 from src.config import settings
+from src.core import fact_keys
 from src.core.database import get_session
 from src.core.textutil import CST, fmt_dt  # noqa: F401 - 对外兼容导出
 from src.core.models import (
@@ -1430,7 +1431,11 @@ async def set_session_preset_by_id(
 
 # ============================== 长期记忆（印象 + 关键信息） ==============================
 
-_IMPRESSION_PROMPT = """你是一个用户信息抽取助手。下面是一位用户与机器人的近期对话，
+# 受控 key 提示行（与 fact_keys 词表同源：改词表即同步）
+_FACT_KEY_LINE = "- facts 的 key 只允许用：" + "/".join(fact_keys.canonical_keys()) + "；\n"
+
+_IMPRESSION_PROMPT = (
+    """你是一个用户信息抽取助手。下面是一位用户与机器人的近期对话，
 以及此前已经记录过的印象与关键信息。请更新它们。
 
 只输出**严格 JSON**（不要代码块、不要解释），格式：
@@ -1439,16 +1444,20 @@ _IMPRESSION_PROMPT = """你是一个用户信息抽取助手。下面是一位�
 要求：
 - 只写对话 / 旧记录中能确认的信息，不要编造；
 - facts 最多 8 条，只保留对长期个性化有用的（称呼、偏好、身份、习惯、禁忌等）；
-- 没有新信息时返回空数组；
+"""
+    + _FACT_KEY_LINE
+    + """- 没有新信息时返回空数组；
 - 不要记录密码、密钥等隐私敏感信息。
 
 【旧印象】{old}
 【旧关键信息】{old_facts}
 【近期对话】
 {convo}"""
+)
 
 
-_GROUP_USER_FACT_PROMPT = """你是一个信息抽取助手。下面是某用户在一个 QQ 群里的发言，
+_GROUP_USER_FACT_PROMPT = (
+    """你是一个信息抽取助手。下面是某用户在一个 QQ 群里的发言，
 以及此前已记录过的、关于该用户的群内可见信息。请只更新「关于这位用户本人」的事实。
 
 只输出**严格 JSON**（不要代码块、不要解释），格式：
@@ -1458,11 +1467,14 @@ _GROUP_USER_FACT_PROMPT = """你是一个信息抽取助手。下面是某用户
 - 只写这些发言里能确认的、关于该用户本人的信息（称呼、偏好、身份、习惯、禁忌等）；
 - 不要把「群聊氛围/别人的事/临时话题」写成该用户的事实；
 - 不要编造；没有新信息时返回空数组；最多 6 条；
-- 不要记录密码、密钥等隐私敏感信息。
+"""
+    + _FACT_KEY_LINE
+    + """- 不要记录密码、密钥等隐私敏感信息。
 
 【旧关键信息】{old_facts}
 【该用户在本群的发言】
 {convo}"""
+)
 
 
 def _group_by_scope(msgs: list[dict]) -> dict[tuple[str, str], list[dict]]:
@@ -1619,6 +1631,15 @@ async def set_fact(
         raise LLMError("关键信息的 key 不能为空")
     if len(key) > 64:
         raise LLMError("关键信息的 key 太长（最多 64 字符）")
+    from src.core import fact_keys
+
+    canon = fact_keys.normalize_key(key)
+    if canon is not None:
+        key = canon
+    elif source == LLM_FACT_AUTO and settings.llm_memory_key_exact:
+        # auto 未受控 key 作为兜底拒绝（_write_facts 已拦，这里是防御）
+        raise LLMError(f"自动提炼的关键信息 key 不在受控词表内：{key}")
+    # manual 未命中：保留原 key（管理员有意写入）
     if scope_type not in FACT_SCOPES:
         raise LLMError(f"记忆作用域非法：{scope_type}（可选 {', '.join(FACT_SCOPES)}）")
     if scope_type == FACT_SCOPE_GROUP:
@@ -2017,8 +2038,10 @@ async def _write_facts(
 
     写入前先过「代码闸门」（`memory_gate`）：对着本批原始消息做引用校验，
     只放行有原文支撑、且未命中四类幻觉规则的事实，避免模型幻觉污染长期画像。
+    再过「受控 key 词表」（`fact_keys`）：别名归一为规范 key；未命中词表的自造 key
+    在 `llm_memory_key_exact` 开启时丢弃（宁缺勿滥），关闭时放行原样。
     """
-    from src.core import memory_gate
+    from src.core import fact_keys, memory_gate
 
     kept, rejected = memory_gate.filter_facts(raw_facts, source_msgs)
     if rejected:
@@ -2028,15 +2051,31 @@ async def _write_facts(
     if not kept:
         return
     existing = await get_profile(uid, scope_type=scope_type, scope_id=scope_id)
-    manual_keys = {f.get("key") for f in (existing.get("facts") or []) if f.get("source") == LLM_FACT_MANUAL}
+    # manual 保护集合按「规范 key」建（否则别名写法会漏保护）
+    manual_keys = {
+        fact_keys.normalize_key(f.get("key")) or f.get("key")
+        for f in (existing.get("facts") or [])
+        if f.get("source") == LLM_FACT_MANUAL
+    }
+    dropped: list[str] = []
     for item in kept:
         if not isinstance(item, dict):
             continue
-        key = str(item.get("key") or "").strip()
+        raw_key = str(item.get("key") or "").strip()
         value = str(item.get("value") or "").strip()
-        if not key or not value or key in manual_keys:
+        if not raw_key or not value:
             continue
-        await set_fact(uid, key, value, source=LLM_FACT_AUTO, scope_type=scope_type, scope_id=scope_id)
+        canon = fact_keys.normalize_key(raw_key)
+        if canon is None:
+            if settings.llm_memory_key_exact:
+                dropped.append(raw_key)   # 未受控 → 丢弃（宁缺勿滥）
+                continue
+            canon = raw_key                # 关闭词表 → 放行原样（旧行为）
+        if canon in manual_keys:
+            continue
+        await set_fact(uid, canon, value, source=LLM_FACT_AUTO, scope_type=scope_type, scope_id=scope_id)
+    if dropped:
+        logger.debug(f"词表丢弃了 {len(dropped)} 条未受控 key：{dropped}")
     await _prune_facts(uid, scope_type=scope_type, scope_id=scope_id)
 
 
