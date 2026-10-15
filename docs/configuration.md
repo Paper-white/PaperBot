@@ -101,6 +101,7 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MEMORY_SCOPE_ISOLATION` | `true` | 记忆跨窗口隔离：群聊只注入「通用 + 本群」信息，不再看到私聊/别群内容；`false` = 退回旧的全量注入 |
 | `LLM_MEMORY_SLOTS_ENABLE` | `true` | 记忆注入分槽保底：通用画像/窗口事实分槽，各槽至少保底若干条，避免近期事实挤掉长期画像 |
 | `LLM_MEMORY_KEY_EXACT` | `true` | 受控 key 词表：自动提炼时未命中词表的自造 key 直接丢弃（`false` = 放行原样） |
+| `LLM_MEMORY_USAGE_ENABLE` | `true` | 记忆用法档：注入时按 mention/tone/uncertain 分组渲染（`false` = 忽略档位、单列表渲染） |
 | `LLM_MAX_FACTS_STORED` | `200` | 单用户单 scope 的事实库内条数上限（超出按最旧 auto 淘汰，manual 永不淘汰） |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：

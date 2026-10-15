@@ -102,46 +102,35 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 
 ## 4. 落地清单（按 ROI 排序）
 
-### 已落地（2026-10-15，本轮）
-- [x] **修复「user-scope 压缩摘要静默丢失」**：`_build_request` 的 user 分支补读 `llm_session.summary`（`llm.py`）
-- [x] **注入加「冲突优先级声明 + 包围标记」**：`build_memory_block` / `build_group_memory_block`（`--- 记忆开始/结束 ---` + 「冲突以当前为准」）
-- [x] **跨窗口隔离（私聊/各群事实分离）**：`llm_user_fact` 加 `scope_type`（`global`/`group`/`private`）+ `scope_id`，
-  唯一键改四元组；`summarize_user` 按来源分批提炼；`_build_request` 群聊只注入 `global + 本群`、
-  **印象降级为私聊专属（群聊不注入印象）**；开关 `LLM_MEMORY_SCOPE_ISOLATION`（默认 true）
-- [x] **`summarize_user` 水位线恒 0 修复（B1）**：`get_profile()` 补返回 `last_msg_id`（此前每轮都重读最早 300 条）
-- [x] **QQ 身份锚**：群聊 system 钉死「当前发言人（QQ）」，判人以 QQ 号为准（配合 `_build_sender_anchor`）
-- [x] **群聊回复合并窗口**：`paperbot_chat` 冷却由「丢消息」改「窗口合并成一轮」，不再丢内容
-- [x] 清理废弃 `refresh_profile`（连同 `PluginLLM.refresh_profile`）
-- [x] 迁移：`database._migrate_llm_fact_scope` 幂等重建表，旧表保留 `llm_user_fact_legacy`，存量事实归 `private`
-
-### 已落地（2026-10-15，第二批）
-- [x] **P0 事实抽取「代码闸门」**：`src/core/memory_gate.py` —— 引用校验（最长公共子串）+ 四类拒绝
-  （转述/角色扮演/临时态/未兑现），`_write_facts` 写入前过滤（只拦 auto）
-- [x] **P1 压缩窗口对齐**：保留窗口改 `2 × LLM_CONTEXT_ROUNDS`，消除「既不压缩也不注入」的中间消息
-- [x] **P1 facts 库内条数上限**：`LLM_MAX_FACTS_STORED`（默认 200）+ `_prune_facts`（只淘汰 auto）
-- [x] **P1 分槽保底注入**：`select_facts_by_slots` —— 通用画像/窗口事实两槽各保底 5 条，
-  预留 `_fact_score` 供未来衰减接入
-
-### P0（低风险、高收益）
-- [ ] ~~事实抽取代码闸门~~ → **已完成（第二批）**
-
-### 已落地（2026-10-15，第三批）
-- [x] **P1 受控 key 词表**：`src/core/fact_keys.py` —— 14 条规范 key + 别名归一 + 单值/多值标记；
+### 已完成（2026-10-15）
+- [x] **修复「user-scope 压缩摘要静默丢失」**：`_build_request` 的 user 分支补读 `llm_session.summary`
+- [x] **注入加「冲突优先级声明 + 包围标记」**：`--- 记忆开始/结束 ---` + 「冲突以当前为准」
+- [x] **跨窗口隔离（私聊/各群事实分离）**：`llm_user_fact` 加 `scope_type` + `scope_id`，唯一键改四元组；
+  `summarize_user` 按来源分批提炼；群聊只注入 `global + 本群`、印象降级为私聊专属（`LLM_MEMORY_SCOPE_ISOLATION`）
+- [x] **`summarize_user` 水位线恒 0 修复（B1）**：`get_profile()` 补返回 `last_msg_id`
+- [x] **QQ 身份锚**：群聊 system 钉死「当前发言人（QQ）」，判人以 QQ 号为准
+- [x] **群聊回复合并窗口**：`paperbot_chat` 冷却由「丢消息」改「窗口合并成一轮」
+- [x] **P0 事实抽取代码闸门**：`src/core/memory_gate.py`（引用校验 + 转述/角色扮演/临时态/未兑现四类拒绝）
+- [x] **P1 压缩窗口对齐**：保留窗口改 `2 × LLM_CONTEXT_ROUNDS`
+- [x] **P1 facts 库内条数上限**：`LLM_MAX_FACTS_STORED=200` + `_prune_facts`（只淘汰 auto）
+- [x] **P1 分槽保底注入**：`select_facts_by_slots`（通用/窗口两槽各保底 5 条），预留 `_fact_score`
+- [x] **P1 受控 key 词表**：`src/core/fact_keys.py`（14 条规范 key + 别名归一 + 单值/多值），
   auto 未命中即丢弃（`LLM_MEMORY_KEY_EXACT`），manual 只归一不丢弃
-- [x] **P2 时间归一化**：提炼时把相对日期词按消息发送时间内联标注成绝对日期
-  （`明天（2026-10-16）`）；标注文本同时用于 prompt 与闸门，保证同源
+- [x] **P2 时间归一化**：相对日期词按消息发送时间内联标注成绝对日期，prompt 与闸门同源
+- [x] **P2 用法档**：`llm_user_fact.usage`（mention/tone/uncertain），槽内分档渲染（`LLM_MEMORY_USAGE_ENABLE`）
+- [x] 清理废弃 `refresh_profile`；清理死配置 `LLM_GROUP_CONTEXT_MSGS`；`_migrate_llm_fact_scope` 幂等迁移
 
-### P1（结构性改进）
-- [x] **受控 key 词表**（2026-10-15 第三批）：`src/core/fact_keys.py`（14 条规范 key + 别名归一 + 单值/多值标记），
-  auto 未命中即丢弃（`LLM_MEMORY_KEY_EXACT`），manual 只归一不丢弃
-- [x] **时间归一化**（2026-10-15 第三批）：相对日期词按消息发送时间内联标注成绝对日期
-- [ ] **单值改口版本链（`supersedes_id`）**：设计已完成（见下方「改口版本链设计结论」），
-      **按 oracle 建议缓做**（涉及 partial unique index 迁移回归风险，且依赖词表先稳定）
-- [ ] ~~分槽注入~~ → **已完成（第二批）**
-- [ ] ~~压缩窗口与注入窗口对齐~~ → **已完成（第二批）**
-- [ ] ~~facts 库内条数上限~~ → **已完成（第二批）**
-- [ ] **半衰期软衰减 + 复述加固**：设计已完成（见下方 §「衰减设计结论」），**判定为 P2 缓做**
-      —— 单机 bot 记忆量小、遗忘压力低，ROI 需长期运行才兑现；字段与 `_fact_score` 排序接口已铺好，随时可接
+### 待办（设计就绪，按 oracle 建议缓做）
+- [ ] **单值改口版本链（`supersedes_id`）**：见下方「改口版本链设计结论」，**P2 缓做**
+      （partial unique index 迁移有回归风险，且依赖词表先稳定）
+- [ ] **半衰期软衰减 + 复述加固**：见下方「衰减设计结论」，**P2 缓做**（单机 bot 记忆量小、ROI 慢）；
+      `_fact_score` 排序接口已铺好，接入时无需改调用方
+- [ ] **WebUI 手写档位下拉**（P3）：用户详情页给 fact 加 usage 选择（默认 mention）
+
+### P3（控规模）
+- [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
+- [ ] 清理策略：`chat_message` / `summary` 的归档与保留期（冷区可恢复，不物理删）
+- [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
 
 ### 改口版本链设计结论（oracle 评审，未实施）
 - 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空），均可自动补列；
@@ -162,16 +151,6 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 
 ### 已废弃（不再需要）
 - [x] ~~修复「群上下文压缩死代码」~~：群作用域改走 `chat_message` 流水，不再依赖群 `llm_session`；群摘要注入分支保留但当前恒空（无群会话），不影响功能
-
-### P2（增强）
-- [ ] 时间归一化规则加进 `_IMPRESSION_PROMPT` / `_GROUP_SUMMARY_PROMPT`
-- [ ] 用法权限档（mention / tone / uncertain）写入记忆字段并参与注入渲染
-- [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
-- [ ] 统一两套提炼入口（废弃 `refresh_profile` 旧路径与 `llm_impression_every` 键）
-
-### P3（控规模）
-- [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
-- [ ] 清理策略：`chat_message` / `summary` 的归档与保留期（冷区可恢复，不物理删）
 
 ## 5. 明确「不要照搬」的坑
 

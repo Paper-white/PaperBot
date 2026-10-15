@@ -64,3 +64,17 @@ def is_multi(key: str) -> bool:
 def canonical_keys() -> tuple[str, ...]:
     """所有规范 key（供 prompt 列举）。"""
     return tuple(_item["key"] for _item in FACT_KEYS)
+
+
+# 模型漏给 usage 时按 key 兜底的建议档（查不到一律 mention）。
+# 只对「档位倾向稳定」的 key 设值：忌口/过敏 安全攸关必须可提；承诺 常需说破。
+_DEFAULT_USAGE: dict[str, str] = {
+    "忌口": "mention",
+    "过敏": "mention",
+    "承诺": "mention",
+}
+
+
+def default_usage(key: str) -> str:
+    """按 key 给一个兜底 usage（未配置一律 mention）。"""
+    return _DEFAULT_USAGE.get(key or "", "mention")

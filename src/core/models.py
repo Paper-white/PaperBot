@@ -209,6 +209,12 @@ FACT_SCOPE_GROUP = "group"      # 仅指定群可见（scope_id = 群号）
 FACT_SCOPE_PRIVATE = "private"  # 仅私聊可见（scope_id 恒为 ""）
 FACT_SCOPES = (FACT_SCOPE_GLOBAL, FACT_SCOPE_GROUP, FACT_SCOPE_PRIVATE)
 
+# 记忆用法档（决定该条事实「怎么用」）
+FACT_USAGE_MENTION = "mention"      # 可信且可自然提及
+FACT_USAGE_TONE = "tone"           # 可信但敏感，只影响语气、勿说破
+FACT_USAGE_UNCERTAIN = "uncertain"  # 推断/弱依据，谨慎参考、不主动用
+FACT_USAGES = (FACT_USAGE_MENTION, FACT_USAGE_TONE, FACT_USAGE_UNCERTAIN)
+
 # 消息类型（聊天流水表）
 CHAT_TYPE_GROUP = "group"
 CHAT_TYPE_PRIVATE = "private"
@@ -436,6 +442,9 @@ class LlmUserFact(Base):
         String(16), default=FACT_SCOPE_PRIVATE, server_default=text("'private'")
     )
     scope_id: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
+    usage: Mapped[str] = mapped_column(
+        String(16), default=FACT_USAGE_MENTION, server_default=text("'mention'")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )

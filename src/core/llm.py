@@ -46,6 +46,10 @@ from src.core.models import (
     FACT_SCOPE_GROUP,
     FACT_SCOPE_PRIVATE,
     FACT_SCOPES,
+    FACT_USAGE_MENTION,
+    FACT_USAGE_TONE,
+    FACT_USAGE_UNCERTAIN,
+    FACT_USAGES,
     LLM_FACT_AUTO,
     LLM_FACT_MANUAL,
     LLM_PRESET_BUILTIN,
@@ -1434,18 +1438,26 @@ async def set_session_preset_by_id(
 # 受控 key 提示行（与 fact_keys 词表同源：改词表即同步）
 _FACT_KEY_LINE = "- facts 的 key 只允许用：" + "/".join(fact_keys.canonical_keys()) + "；\n"
 
+# 用法档提示行
+_USAGE_LINE = (
+    "- facts 每项必须有 usage 字段，三选一：mention=可信且可自然提及；"
+    "tone=可信但敏感，只影响语气、绝不把内容说破；"
+    "uncertain=推断或依据弱，只能谨慎参考、不要主动使用。\n"
+)
+
 _IMPRESSION_PROMPT = (
     """你是一个用户信息抽取助手。下面是一位用户与机器人的近期对话，
 以及此前已经记录过的印象与关键信息。请更新它们。
 
 只输出**严格 JSON**（不要代码块、不要解释），格式：
-{{"impression": "80 字以内的用户画像", "facts": [{{"key": "简短键名", "value": "具体内容"}}]}}
+{{"impression": "80 字以内的用户画像", "facts": [{{"key": "简短键名", "value": "具体内容", "usage": "mention"}}]}}
 
 要求：
 - 只写对话 / 旧记录中能确认的信息，不要编造；
 - facts 最多 8 条，只保留对长期个性化有用的（称呼、偏好、身份、习惯、禁忌等）；
 """
     + _FACT_KEY_LINE
+    + _USAGE_LINE
     + """- 消息里形如「明天（2026-10-16）」是原始相对时间的**绝对日期标注**；记录时间相关事实时请用绝对日期。
 - 没有新信息时返回空数组；
 - 不要记录密码、密钥等隐私敏感信息。
@@ -1462,7 +1474,7 @@ _GROUP_USER_FACT_PROMPT = (
 以及此前已记录过的、关于该用户的群内可见信息。请只更新「关于这位用户本人」的事实。
 
 只输出**严格 JSON**（不要代码块、不要解释），格式：
-{{"facts": [{{"key": "简短键名", "value": "具体内容"}}]}}
+{{"facts": [{{"key": "简短键名", "value": "具体内容", "usage": "mention"}}]}}
 
 要求：
 - 只写这些发言里能确认的、关于该用户本人的信息（称呼、偏好、身份、习惯、禁忌等）；
@@ -1470,6 +1482,7 @@ _GROUP_USER_FACT_PROMPT = (
 - 不要编造；没有新信息时返回空数组；最多 6 条；
 """
     + _FACT_KEY_LINE
+    + _USAGE_LINE
     + """- 消息里形如「明天（2026-10-16）」是原始相对时间的**绝对日期标注**；记录时间相关事实时请用绝对日期。
 - 不要记录密码、密钥等隐私敏感信息。
 
@@ -1574,6 +1587,12 @@ def _extract_json(text: str) -> dict:
         return {}
 
 
+def _norm_usage(raw) -> str:
+    """usage 归一：只接受三档，其余（含空）一律回落 mention（安全默认）。"""
+    u = str(raw or "").strip().lower()
+    return u if u in FACT_USAGES else FACT_USAGE_MENTION
+
+
 async def get_profile(
     user_id: str | int,
     *,
@@ -1629,6 +1648,7 @@ async def get_profile(
                 "source": f.source or LLM_FACT_AUTO,
                 "scope_type": f.scope_type or FACT_SCOPE_PRIVATE,
                 "scope_id": f.scope_id or "",
+                "usage": f.usage or FACT_USAGE_MENTION,
                 "updated_at": (
                     fmt_dt(f.updated_at)
                 ),
@@ -1668,6 +1688,7 @@ async def set_fact(
     source: str = LLM_FACT_MANUAL,
     scope_type: str = FACT_SCOPE_GLOBAL,
     scope_id: str = "",
+    usage: str = FACT_USAGE_MENTION,
     overwrite_manual: bool = False,
 ) -> dict:
     """写入 / 更新一条关键信息（`source=auto` 默认不覆盖同 scope 的人工记录）。
@@ -1677,6 +1698,8 @@ async def set_fact(
     - `group`：仅该群可见，`scope_id` 必须为群号；
     - `private`：仅私聊可见，`scope_id` 恒为 ""。
     唯一键为 `(user_id, fact_key, scope_type, scope_id)`。
+
+    `usage` 为用法档（见 FACT_USAGE_* 常量），非三档值一律回落 mention。
     """
     uid = str(user_id)
     key = (key or "").strip()
@@ -1684,6 +1707,7 @@ async def set_fact(
         raise LLMError("关键信息的 key 不能为空")
     if len(key) > 64:
         raise LLMError("关键信息的 key 太长（最多 64 字符）")
+    usage = _norm_usage(usage)
     from src.core import fact_keys
 
     canon = fact_keys.normalize_key(key)
@@ -1723,6 +1747,7 @@ async def set_fact(
             session.add(row)
         row.fact_value = value or ""
         row.source = source
+        row.usage = usage
         await session.commit()
     return await get_profile(uid)
 
@@ -1880,8 +1905,44 @@ def select_facts_by_slots(
     return {"global": picked_g, "window": picked_w}
 
 
+def _group_by_usage(facts: list[dict]) -> dict[str, list[dict]]:
+    """把事实按 usage 分三组（mention / tone / uncertain），保持各自顺序。"""
+    out: dict[str, list[dict]] = {FACT_USAGE_MENTION: [], FACT_USAGE_TONE: [], FACT_USAGE_UNCERTAIN: []}
+    for f in facts:
+        out.setdefault(_norm_usage(f.get("usage")), []).append(f)
+    return out
+
+
+# usage 档 → 子块标题（顺序即渲染顺序）
+_USAGE_TITLES: dict[str, str] = {
+    FACT_USAGE_MENTION: "【可自然提及】",
+    FACT_USAGE_TONE: "【只影响语气，勿说破】",
+    FACT_USAGE_UNCERTAIN: "【不太确定，谨慎参考】",
+}
+
+
+def _render_fact_slot(title: str, facts: list[dict], *, tiers: bool) -> str:
+    """渲染一个槽：`tiers=True` 时槽内再按 usage 分三个非空子块（空档不输出）。"""
+    def _line(f: dict) -> str:
+        return f"- {f['key']}：{f.get('value', '')}"
+
+    if not tiers:
+        return title + "\n" + "\n".join(_line(f) for f in facts)
+    blocks: list[str] = []
+    groups = _group_by_usage(facts)
+    for usage in (FACT_USAGE_MENTION, FACT_USAGE_TONE, FACT_USAGE_UNCERTAIN):
+        items = groups.get(usage) or []
+        if not items:
+            continue
+        blocks.append(_USAGE_TITLES[usage] + "\n" + "\n".join(_line(f) for f in items))
+    if not blocks:
+        return ""
+    return title + "\n" + "\n\n".join(blocks)
+
+
 def build_memory_block(
-    profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private", slots: bool = True
+    profile: dict, *, max_facts: Optional[int] = None, owner: str = "", scope: str = "private",
+    slots: bool = True, usage_tiers: bool = True,
 ) -> str:
     """把长期记忆拼成一段注入 system 的提示词（空白记忆返回空串）。
 
@@ -1895,6 +1956,9 @@ def build_memory_block(
 
     `slots=True`（且 `llm_memory_slots_enable` 开启、`scope` 非 "all"）时，facts 按
     「通用画像 / 窗口事实」分槽渲染并各自保底，避免近期活跃窗口的事实挤掉长期稳定画像。
+
+    `usage_tiers=True`（且 `llm_memory_usage_enable` 开启、走分槽路径）时，每个槽内
+    再按 usage 分三档（mention/tone/uncertain）渲染子块，精确控制「怎么说」。
     """
     if not profile:
         return ""
@@ -1910,20 +1974,14 @@ def build_memory_block(
     # 分槽保底：通用画像 / 窗口事实 分槽渲染，避免近期事实挤掉长期画像
     if slots and settings.llm_memory_slots_enable and scope in ("group", "private"):
         groups = select_facts_by_slots(facts, scope=scope, max_facts=limit)
+        tiers = usage_tiers and settings.llm_memory_usage_enable
         general = groups.get("global") or []
         window = groups.get("window") or []
         if general:
-            lines.append(
-                "【已知关键信息（通用画像）】\n"
-                + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in general)
-            )
+            lines.append(_render_fact_slot("【已知关键信息（通用画像）】", general, tiers=tiers))
         if window:
             title = "【本群已知】" if scope == "group" else "【私聊已知】"
-            lines.append(
-                title
-                + "\n"
-                + "\n".join(f"- {f['key']}：{f.get('value', '')}" for f in window)
-            )
+            lines.append(_render_fact_slot(title, window, tiers=tiers))
     else:
         # 关闭分槽 / 隔离关闭（scope="all"）：保持原单层渲染
         if limit and limit > 0:
@@ -2126,7 +2184,13 @@ async def _write_facts(
             canon = raw_key                # 关闭词表 → 放行原样（旧行为）
         if canon in manual_keys:
             continue
-        await set_fact(uid, canon, value, source=LLM_FACT_AUTO, scope_type=scope_type, scope_id=scope_id)
+        # 用法档：模型给了就用，没给则按 key 兜底表（当前三 key 均 mention）
+        raw_usage = item.get("usage")
+        usage = _norm_usage(raw_usage) if raw_usage else fact_keys.default_usage(canon)
+        await set_fact(
+            uid, canon, value, source=LLM_FACT_AUTO,
+            scope_type=scope_type, scope_id=scope_id, usage=usage,
+        )
     if dropped:
         logger.debug(f"词表丢弃了 {len(dropped)} 条未受控 key：{dropped}")
     await _prune_facts(uid, scope_type=scope_type, scope_id=scope_id)
