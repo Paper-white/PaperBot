@@ -24,6 +24,7 @@ TABLE_LABELS = {
     "plugin_rule": "插件门控规则（全局 / 分群 / 分成员）",
     "user_permission": "用户权限授予（黑名单 / 群管理员）",
     "chat_message": "聊天记录（原始流水：群 + 私聊，含发送者 QQ）",
+    "chat_message_archive": "聊天记录归档（冷区）",
     "llm_group_profile": "群记忆（由定时总结提炼）",
 }
 

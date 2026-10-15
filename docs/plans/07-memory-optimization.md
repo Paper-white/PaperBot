@@ -128,9 +128,13 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - [ ] **WebUI 手写档位下拉**（P3）：用户详情页给 fact 加 usage 选择（默认 mention）
 
 ### P3（控规模）
+- [x] **`chat_message` 归档 / 保留期**（2026-10-15 第四批）：`chat_message_archive` 冷区表 +
+  `archive_messages` / `restore_messages` + `scheduler.run_archive_cycle`（每日一轮）；
+  只归档「时间到期**且**已过提炼水位线」的消息（含「有发言无画像」守卫），绝不丢未提炼数据；
+  开关 `CHATLOG_ARCHIVE_ENABLE` / `CHATLOG_RETENTION_DAYS=90` / `CHATLOG_ARCHIVE_BATCH`
 - [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
-- [ ] 清理策略：`chat_message` / `summary` 的归档与保留期（冷区可恢复，不物理删）
 - [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
+- [ ] 深冷归档（archive 表也大时，导出 JSONL/parquet）— 暂不做
 
 ### 改口版本链设计结论（oracle 评审，未实施）
 - 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空），均可自动补列；

@@ -251,6 +251,31 @@ class ChatMessage(Base):
         return f"<ChatMessage {where} {who}: {self.content[:20]!r}>"
 
 
+class ChatMessageArchive(Base):
+    """聊天记录冷区归档（保留期外的流水，结构同 ChatMessage，可恢复）。
+
+    由 `scheduler` 每日把 `chat_message` 中「时间到期且已过提炼水位线」的老消息搬入，
+    主表只留热区。保存原 `id`（不重新自增），恢复 = INSERT ... SELECT 回主表。
+    """
+
+    __tablename__ = "chat_message_archive"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    platform: Mapped[str] = mapped_column(String(16), default="onebot11")
+    message_type: Mapped[str] = mapped_column(String(16), default=CHAT_TYPE_GROUP)
+    group_id: Mapped[str] = mapped_column(String(64), default="")
+    user_id: Mapped[str] = mapped_column(String(64), default="")
+    nickname: Mapped[str] = mapped_column(String(128), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    message_id: Mapped[str] = mapped_column(String(64), default="")
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<ChatMessageArchive {self.id} {self.user_id} {self.content[:16]!r}>"
+
+
 class LlmProvider(Base):
     """LLM 服务商配置（OpenAI 兼容，可存多套 + 指定默认）。
 

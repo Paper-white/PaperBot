@@ -112,6 +112,9 @@ Copy-Item .env.example .config\main\.env
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `CHATLOG_ENABLE` | `true` | 全局钩子把收到的消息（群 + 私聊，含 bot）逐条写入 `chat_message` 表 |
+| `CHATLOG_ARCHIVE_ENABLE` | `true` | 聊天流水归档总开关：把保留期外、且已过提炼水位线的老消息搬进 `chat_message_archive` |
+| `CHATLOG_RETENTION_DAYS` | `90` | 主表保留最近 N 天（更老的进冷区；只归档已提炼的，绝不丢未提炼数据） |
+| `CHATLOG_ARCHIVE_BATCH` | `5000` | 每日每批最多搬多少条（防长事务） |
 | `LLM_SUMMARY_ENABLE` | `true` | 定时记忆总结 + 上下文压缩总开关 |
 | `LLM_SUMMARY_INTERVAL` | `1800` | 总结周期（秒），默认 30 分钟 |
 | `LLM_SUMMARY_PROVIDER` | 空 | 总结用服务商（留空 = 默认服务商） |

@@ -22,7 +22,12 @@ from sqlalchemy import select
 
 from src.config import settings
 from src.core.database import get_session
-from src.core.models import CHAT_TYPE_GROUP, CHAT_TYPE_PRIVATE, ChatMessage
+from src.core.models import (
+    CHAT_TYPE_GROUP,
+    CHAT_TYPE_PRIVATE,
+    ChatMessage,
+    ChatMessageArchive,
+)
 from src.core.textutil import CST, fmt_dt  # noqa: F401 - fmt_dt 对外兼容导出
 
 logger = nonebot.logger
@@ -199,6 +204,120 @@ async def delete_messages(*, group_id: Optional[str] = None, before_id: Optional
     return int(result.rowcount or 0)
 
 
+async def archive_messages(*, before_id: int, batch: int = 5000) -> dict:
+    """把 `id < before_id` 的流水搬进 `chat_message_archive`（同事务：插入 + 删除）。
+
+    机械搬移，不判断水位线（由 scheduler 负责算安全的 before_id）。幂等：
+    归档表以原 id 做主键，插入前先查已存在的 id 跳过，重复跑不会产生重复行。
+    返回 {"candidates", "archived", "deleted"}（archived = 本批真正新插入的条数）。
+    """
+    from sqlalchemy import delete
+
+    before = int(before_id)
+    limit = max(1, int(batch))
+    async with get_session() as session:
+        # 本批要搬的 ORM 行（升序取最旧的 limit 条）
+        rows = (
+            (
+                await session.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.id < before)
+                    .order_by(ChatMessage.id.asc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return {"candidates": 0, "archived": 0, "deleted": 0}
+        ids = [int(r.id) for r in rows]
+        # 归档表里已存在的 id（跳过，避免主键冲突 → 等价 INSERT OR IGNORE）
+        existed = set(
+            (
+                await session.execute(
+                    select(ChatMessageArchive.id).where(ChatMessageArchive.id.in_(ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        fresh = [r for r in rows if int(r.id) not in existed]
+        session.add_all(
+            ChatMessageArchive(
+                id=r.id,
+                platform=r.platform or "onebot11",
+                message_type=r.message_type or CHAT_TYPE_GROUP,
+                group_id=r.group_id or "",
+                user_id=r.user_id or "",
+                nickname=r.nickname or "",
+                content=r.content or "",
+                message_id=r.message_id or "",
+                is_bot=bool(r.is_bot),
+                created_at=r.created_at,
+            )
+            for r in fresh
+        )
+        deleted = (
+            await session.execute(delete(ChatMessage).where(ChatMessage.id.in_(ids)))
+        ).rowcount or 0
+        await session.commit()
+    return {"candidates": len(ids), "archived": len(fresh), "deleted": int(deleted)}
+
+
+async def restore_messages(*, before_id: int, batch: int = 5000) -> int:
+    """把归档表里 `id < before_id` 的记录搬回主表（幂等），返回真正恢复的条数。
+
+    与 `archive_messages` 对称：先查主表已有 id 跳过（等价 INSERT OR IGNORE），
+    再把归档行插回主表并从归档表删除，用于回滚 / 审计。
+    """
+    from sqlalchemy import delete
+
+    before = int(before_id)
+    limit = max(1, int(batch))
+    async with get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ChatMessageArchive)
+                    .where(ChatMessageArchive.id < before)
+                    .order_by(ChatMessageArchive.id.asc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return 0
+        ids = [int(r.id) for r in rows]
+        existed = set(
+            (await session.execute(select(ChatMessage.id).where(ChatMessage.id.in_(ids))))
+            .scalars()
+            .all()
+        )
+        fresh = [r for r in rows if int(r.id) not in existed]
+        session.add_all(
+            ChatMessage(
+                id=r.id,
+                platform=r.platform or "onebot11",
+                message_type=r.message_type or CHAT_TYPE_GROUP,
+                group_id=r.group_id or "",
+                user_id=r.user_id or "",
+                nickname=r.nickname or "",
+                content=r.content or "",
+                message_id=r.message_id or "",
+                is_bot=bool(r.is_bot),
+                created_at=r.created_at,
+            )
+            for r in fresh
+        )
+        # 归档表里这些 id 都清掉（已恢复的 + 主表本就有的，后者属冗余）
+        await session.execute(delete(ChatMessageArchive).where(ChatMessageArchive.id.in_(ids)))
+        await session.commit()
+    return len(fresh)
+
+
 __all__ = [
     "install_chatlog",
     "fmt_dt",
@@ -206,4 +325,6 @@ __all__ = [
     "messages_since",
     "messages_by_user",
     "delete_messages",
+    "archive_messages",
+    "restore_messages",
 ]
