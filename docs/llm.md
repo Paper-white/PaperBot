@@ -267,6 +267,10 @@ WebUI 手写（`manual`）只做别名归一、保留原 key 不丢弃。
 被注入即回血 `weight+0.2`（上限 1.0）、`access_count+1`、刷新 `last_used_at`（6 小时节流）。
 **只降权、不删除**：低分只让记忆在分槽排序里沉底（下限 0.05），行永远保留。
 
+**单值改口版本链**（`LLM_MEMORY_SUPERSEDE_ENABLE`，默认 `true`）：单值 key（所在地/职业…）改口时，
+旧值标 `superseded`、新值 `supersedes_id` 指向旧行——**旧值保留在库**（支持「你以前说过…」，v1 仅保留不注入）；
+多值 key（爱好/承诺…）不同值**并存**，绝不互相取代。注入只取当前有效（`active`）的事实。
+
 **定时总结**：由后台调度器（`src/core/scheduler.py`）**每 `LLM_SUMMARY_INTERVAL` 秒**（默认 1800）
 增量跑一轮：
 

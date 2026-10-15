@@ -130,7 +130,9 @@ async def _migrate_llm_fact_scope(conn) -> bool:  # noqa: ANN001 - AsyncConnecti
         r[1]
         for r in (await conn.exec_driver_sql("PRAGMA index_list('llm_user_fact')")).fetchall()
     }
-    if "uq_llm_fact_scope" in idx:
+    # 两者任一存在即视为「已迁移」：uq_llm_fact_active 由改口版本链迁移建出，
+    # 若只认 uq_llm_fact_scope，会在状态迁移删掉它之后误判未迁移、再次整表重建。
+    if "uq_llm_fact_scope" in idx or "uq_llm_fact_active" in idx:
         return False
 
     await conn.exec_driver_sql("ALTER TABLE llm_user_fact RENAME TO llm_user_fact_legacy")
@@ -149,6 +151,36 @@ async def _migrate_llm_fact_scope(conn) -> bool:  # noqa: ANN001 - AsyncConnecti
     return True
 
 
+async def _migrate_llm_fact_status(conn) -> bool:  # noqa: ANN001 - AsyncConnection
+    """把 llm_user_fact 的唯一键从全量四列唯一索引换成「仅 active 行」的 partial unique index。
+
+    `status` 列由 `_add_missing_columns` 自动补；这里只切换索引（幂等：已存在
+    `uq_llm_fact_active` 则跳过）。
+    """
+    exists = (
+        await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_user_fact'"
+        )
+    ).fetchall()
+    if not exists:
+        return False
+    idx = {
+        r[1]
+        for r in (await conn.exec_driver_sql("PRAGMA index_list('llm_user_fact')")).fetchall()
+    }
+    if "uq_llm_fact_active" in idx:
+        return False
+    await conn.exec_driver_sql('DROP INDEX IF EXISTS "uq_llm_fact_scope"')
+    # ⚠️ 列集必须与 models.LlmUserFact.__table_args__ 完全一致（含 fact_value）：
+    # 否则迁移后的旧库上「多值 key 按 value 并存」会因唯一冲突而失效。
+    await conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS \"uq_llm_fact_active\" "
+        "ON llm_user_fact (user_id, fact_key, scope_type, scope_id, fact_value) "
+        "WHERE status = 'active'"
+    )
+    return True
+
+
 async def init_db() -> None:
     """建立连接并创建所有表（若不存在），并补齐旧表缺失的新列。"""
     engine, _ = _ensure_engine()
@@ -156,10 +188,13 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         added = await _add_missing_columns(conn)
         migrated = await _migrate_llm_fact_scope(conn)
+        migrated_status = await _migrate_llm_fact_status(conn)
     if added:
         logger.info(f"数据库结构已自动补齐：{', '.join(added)}")
     if migrated:
         logger.info("llm_user_fact 唯一键已重建（含 scope），旧表保留为 llm_user_fact_legacy")
+    if migrated_status:
+        logger.info("llm_user_fact 唯一键已切换为 active 版本（partial unique index）")
 
 
 @asynccontextmanager

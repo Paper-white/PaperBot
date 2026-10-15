@@ -215,6 +215,11 @@ FACT_USAGE_TONE = "tone"           # 可信但敏感，只影响语气、勿说�
 FACT_USAGE_UNCERTAIN = "uncertain"  # 推断/弱依据，谨慎参考、不主动用
 FACT_USAGES = (FACT_USAGE_MENTION, FACT_USAGE_TONE, FACT_USAGE_UNCERTAIN)
 
+# 事实状态（改口版本链：active = 当前有效，superseded = 被新值取代但保留）
+FACT_STATUS_ACTIVE = "active"
+FACT_STATUS_SUPERSEDED = "superseded"
+FACT_STATUSES = (FACT_STATUS_ACTIVE, FACT_STATUS_SUPERSEDED)
+
 # 消息类型（聊天流水表）
 CHAT_TYPE_GROUP = "group"
 CHAT_TYPE_PRIVATE = "private"
@@ -447,13 +452,15 @@ class LlmUserFact(Base):
 
     __tablename__ = "llm_user_fact"
     __table_args__ = (
+        # 只约束 active 行（partial unique index），并含 fact_value：同一
+        # (user, key, scope) 的**同值**只允许一条 active（去重由 DB 兜底），
+        # **不同值**可并存 —— 正好是「多值维度按 value 并存」的语义。
+        # 单值 key 的「同 scope 唯一 active」由应用层（set_fact 改口版本链）保证。
         Index(
-            "uq_llm_fact_scope",
-            "user_id",
-            "fact_key",
-            "scope_type",
-            "scope_id",
+            "uq_llm_fact_active",
+            "user_id", "fact_key", "scope_type", "scope_id", "fact_value",
             unique=True,
+            sqlite_where=text("status = 'active'"),
         ),
         Index("ix_llm_user_fact_user_scope", "user_id", "scope_type", "scope_id"),
     )
@@ -470,6 +477,10 @@ class LlmUserFact(Base):
     usage: Mapped[str] = mapped_column(
         String(16), default=FACT_USAGE_MENTION, server_default=text("'mention'")
     )
+    status: Mapped[str] = mapped_column(
+        String(16), default=FACT_STATUS_ACTIVE, server_default=text("'active'")
+    )  # active = 当前有效；superseded = 被新值取代但保留
+    supersedes_id: Mapped[Optional[int]] = mapped_column(Integer, default=None)
     weight: Mapped[float] = mapped_column(
         Float, default=1.0, server_default=text("1.0")
     )  # 衰减权重（1.0 = 全新；只降不删，恒 ≥ MIN_WEIGHT）

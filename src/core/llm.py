@@ -46,6 +46,8 @@ from src.core.models import (
     FACT_SCOPE_GROUP,
     FACT_SCOPE_PRIVATE,
     FACT_SCOPES,
+    FACT_STATUS_ACTIVE,
+    FACT_STATUS_SUPERSEDED,
     FACT_USAGE_MENTION,
     FACT_USAGE_TONE,
     FACT_USAGE_UNCERTAIN,
@@ -1613,7 +1615,11 @@ async def get_profile(
                 select(LlmUserProfile).where(LlmUserProfile.user_id == uid).limit(1)
             )
         ).scalar_one_or_none()
-        stmt = select(LlmUserFact).where(LlmUserFact.user_id == uid)
+        # 只返回 active（改口版本链里被取代的旧值不注入）
+        stmt = select(LlmUserFact).where(
+            LlmUserFact.user_id == uid,
+            LlmUserFact.status == FACT_STATUS_ACTIVE,
+        )
         if scope_type == FACT_SCOPE_PRIVATE:
             stmt = stmt.where(LlmUserFact.scope_type.in_((FACT_SCOPE_GLOBAL, FACT_SCOPE_PRIVATE)))
         elif scope_type == FACT_SCOPE_GROUP:
@@ -1733,34 +1739,87 @@ async def set_fact(
     else:
         scope_id = ""
     async with get_session() as session:
-        row = (
+        active = (
             await session.execute(
-                select(LlmUserFact)
-                .where(
+                select(LlmUserFact).where(
                     LlmUserFact.user_id == uid,
                     LlmUserFact.fact_key == key,
                     LlmUserFact.scope_type == scope_type,
                     LlmUserFact.scope_id == scope_id,
-                )
-                .limit(1)
+                    LlmUserFact.status == FACT_STATUS_ACTIVE,
+                ).limit(1)
             )
         ).scalar_one_or_none()
-        if row is not None and row.source == LLM_FACT_MANUAL and source == LLM_FACT_AUTO and not overwrite_manual:
+
+        # manual 保护：auto 不覆盖同 scope 的 manual（保持原语义）
+        if (
+            active is not None
+            and active.source == LLM_FACT_MANUAL
+            and source == LLM_FACT_AUTO
+            and not overwrite_manual
+        ):
             return await get_profile(uid)
-        if row is None:
+
+        supersede_on = bool(settings.llm_memory_supersede_enable)
+        not_multi = not fact_keys.is_multi(key)
+
+        if active is None:
             row = LlmUserFact(
-                user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id
+                user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id,
+                status=FACT_STATUS_ACTIVE,
             )
             session.add(row)
-        changed = (row.fact_value or "") != (value or "")
-        row.fact_value = value or ""
-        row.source = source
-        row.usage = usage
-        if changed:
-            # 值变了 → 重置生命周期统计，避免旧 weight/使用痕迹残留在新值上
-            row.weight = 1.0
-            row.access_count = 0
-            row.last_used_at = None
+            row.fact_value = value or ""
+            row.source = source
+            row.usage = usage
+        elif (active.fact_value or "") == (value or ""):
+            # 值未变：no-op（保留统计；但 source/usage 可更新为最新）
+            active.source = source
+            active.usage = usage
+        elif supersede_on and not_multi:
+            # 单值改口：插新 active 行 + 旧行标 superseded（保留旧值）
+            new = LlmUserFact(
+                user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id,
+                status=FACT_STATUS_ACTIVE, supersedes_id=active.id,
+            )
+            session.add(new)
+            new.fact_value = value or ""
+            new.source = source
+            new.usage = usage
+            active.status = FACT_STATUS_SUPERSEDED
+        elif supersede_on and not not_multi:
+            # 多值：同 key+scope 下按 value 去重后并存（不动旧行）
+            dup = (
+                await session.execute(
+                    select(LlmUserFact).where(
+                        LlmUserFact.user_id == uid,
+                        LlmUserFact.fact_key == key,
+                        LlmUserFact.scope_type == scope_type,
+                        LlmUserFact.scope_id == scope_id,
+                        LlmUserFact.status == FACT_STATUS_ACTIVE,
+                        LlmUserFact.fact_value == (value or ""),
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if dup is None:
+                row = LlmUserFact(
+                    user_id=uid, fact_key=key, scope_type=scope_type, scope_id=scope_id,
+                    status=FACT_STATUS_ACTIVE,
+                )
+                session.add(row)
+                row.fact_value = value or ""
+                row.source = source
+                row.usage = usage
+        else:
+            # 关闭改口（supersede_enable=False）→ 退回旧行为：原地覆盖 + 值变化重置统计
+            changed = (active.fact_value or "") != (value or "")
+            active.fact_value = value or ""
+            active.source = source
+            active.usage = usage
+            if changed:
+                active.weight = 1.0
+                active.access_count = 0
+                active.last_used_at = None
         await session.commit()
     return await get_profile(uid)
 
@@ -1784,9 +1843,9 @@ async def list_profiles(limit: int = 200) -> list[dict]:
         counts = dict(
             (
                 await session.execute(
-                    select(LlmUserFact.user_id, func.count(LlmUserFact.id)).group_by(
-                        LlmUserFact.user_id
-                    )
+                    select(LlmUserFact.user_id, func.count(LlmUserFact.id))
+                    .where(LlmUserFact.status == FACT_STATUS_ACTIVE)
+                    .group_by(LlmUserFact.user_id)
                 )
             ).all()
         )
@@ -2331,6 +2390,8 @@ async def _prune_facts(uid: str, *, scope_type: str, scope_id: str) -> int:
                         LlmUserFact.user_id == uid,
                         LlmUserFact.scope_type == scope_type,
                         LlmUserFact.scope_id == scope_id,
+                        # 只裁 active：superseded 历史行不参与淘汰，避免断链
+                        LlmUserFact.status == FACT_STATUS_ACTIVE,
                     )
                     .order_by(LlmUserFact.updated_at.asc(), LlmUserFact.id.asc())
                 )

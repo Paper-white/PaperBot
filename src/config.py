@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     llm_memory_decay_half_life_window: float = 30.0   # 窗口事实半衰期（天）
     llm_memory_decay_reinforce: float = 0.2       # 每次被注入的权重回血量
     llm_memory_decay_touch_interval: int = 21600  # 强化写库节流（秒，默认 6 小时）
+    # 单值事实改口版本链：改口时保留旧值（标 superseded + supersedes_id）；False = 原地覆盖
+    llm_memory_supersede_enable: bool = True
 
     # ============ 聊天记录（原始流水层，见 src/core/chatlog.py） ============
     # 全局钩子把收到的消息（群 + 私聊，含 bot 自己的）逐条写入 chat_message 表。

@@ -107,6 +107,7 @@ Copy-Item .env.example .config\main\.env
 | `LLM_MEMORY_DECAY_HALF_LIFE_WINDOW` | `30` | 窗口事实（本群/私聊）半衰期（天） |
 | `LLM_MEMORY_DECAY_REINFORCE` | `0.2` | 每次被注入（复述）的权重回血量 |
 | `LLM_MEMORY_DECAY_TOUCH_INTERVAL` | `21600` | 复述加固写库节流（秒，默认 6 小时） |
+| `LLM_MEMORY_SUPERSEDE_ENABLE` | `true` | 单值事实改口版本链：改口时保留旧值（标 superseded + supersedes_id）；`false` = 原地覆盖 |
 | `LLM_MAX_FACTS_STORED` | `200` | 单用户单 scope 的事实库内条数上限（超出按最旧 auto 淘汰，manual 永不淘汰） |
 
 > ⚠️ `LLM_IMPRESSION_EVERY` 已**停用**（仅兼容旧 `.env` 保留）：

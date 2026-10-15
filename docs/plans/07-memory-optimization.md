@@ -120,25 +120,28 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - [x] **P2 用法档**：`llm_user_fact.usage`（mention/tone/uncertain），槽内分档渲染（`LLM_MEMORY_USAGE_ENABLE`）
 - [x] **P2 半衰期软衰减 + 复述加固**：`weight`/`access_count`/`last_used_at`；
   `_fact_score = weight × 0.5^(age/half_life)`（manual 不衰减）；注入即回血 + 节流写库；**只降权不删**
+- [x] **P1 单值改口版本链（`supersedes_id`）**：`llm_user_fact` 加 `status`（active/superseded）+ `supersedes_id`；
+  唯一键改 **partial unique index**（`WHERE status='active'`，含 `fact_value` 以支持多值并存）；
+  单值改口保留旧值、多值并存；`get_profile` / `_prune_facts` / `fact_count` 均只计 active；
+  开关 `LLM_MEMORY_SUPERSEDE_ENABLE`；迁移 `_migrate_llm_fact_status`（换索引、不整表重建）
 - [x] **P3 `chat_message` 归档 / 保留期**：`chat_message_archive` 冷区表 + 每日归档
   （只归档「时间到期且已过水位线」的消息）；`CHATLOG_ARCHIVE_ENABLE` / `CHATLOG_RETENTION_DAYS=90`
 - [x] 清理废弃 `refresh_profile`；清理死配置 `LLM_GROUP_CONTEXT_MSGS`；`_migrate_llm_fact_scope` 幂等迁移
 
 ### 待办
-- [ ] **单值改口版本链（`supersedes_id`）**：见下方「改口版本链设计结论」（partial unique index 迁移）
-- [ ] **WebUI 手写档位下拉**（P3）：用户详情页给 fact 加 usage 选择（默认 mention）
+- [ ] **WebUI 手写档位下拉 / 改口历史展示**（P3）：用户详情页给 fact 加 usage 选择、按 `supersedes_id` 展示旧值
 - [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
 - [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
 
-### 改口版本链设计结论（oracle 评审，未实施）
-- 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空），均可自动补列；
-- 唯一键改 **partial unique index**：`(user_id,fact_key,scope_type,scope_id) WHERE status='active'`
-  （SQLite 支持；当前唯一键本是具名索引，可 DROP+CREATE，无需整表重建）；
+### 改口版本链设计结论（oracle 评审，**已实施**，2026-10-15）
+- 字段：`llm_user_fact` 加 `status`（`active`/`superseded`，默认 active）+ `supersedes_id`（可空）；
+- 唯一键：**partial unique index** `uq_llm_fact_active`，`(user_id,fact_key,scope_type,scope_id,fact_value) WHERE status='active'`
+  （含 `fact_value` 以支持多值并存；SQLite 支持 partial index，可 DROP+CREATE、无需整表重建）；
 - 改口判定：单值 key 值变化 → 插新行 + 旧行标 superseded + 新行 `supersedes_id=旧行.id`；多值 key 值变化 → 并存 + 值去重；
-- **必同步改**：`_prune_facts` 加 `status='active'` 过滤（否则先删最旧的 superseded 行、断链）、
-  `_migrate_llm_fact_scope` 守卫改为「`uq_llm_fact_scope` **或** `uq_llm_fact_active` 任一存在即已迁移」；
-- 读路径 `get_profile` 只返回 active；「以前说过」v1 仅保留在库、不注入；
-- 开关 `llm_memory_supersede_enable`；**结论：P2 缓做**（低频场景，不修只丢历史、不影响正确性）。
+- 同步改：`_prune_facts` 只裁 active；`get_profile` 只返回 active；`list_profiles` 仅计 active；
+  `_migrate_llm_fact_scope` 守卫改「`uq_llm_fact_scope` 或 `uq_llm_fact_active` 任一存在即已迁移」；
+- 索引列集必须与 `models.__table_args__` **完全一致**（含 `fact_value`），否则迁移后旧库多值并存失效；
+- 开关 `LLM_MEMORY_SUPERSEDE_ENABLE`；「以前说过」v1 仅保留在库、不注入（WebUI 展示留 P3）。
 
 ### 衰减设计结论（oracle 评审，**已实施**，2026-10-15）
 - 字段：`llm_user_fact` 加 `weight`（默认 1.0）/ `access_count`（默认 0）/ `last_used_at`（可空），均自动补列；
