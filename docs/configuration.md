@@ -49,7 +49,7 @@ Copy-Item .env.example .config\main\.env
 
 | 键 | 说明 |
 |---|---|
-| `BOT_ACTIVE_GROUPS` | **唯一群白名单**（JSON 数组）：门控默认策略 + 消息输出守卫**共用同一份**；留空 = 不向任何群发消息 |
+| `BOT_ACTIVE_GROUPS` | **唯一群白名单**（JSON 数组）：门控默认策略 + 消息输出守卫**共用同一份**；留空 = 不向任何群发消息。WebUI「系统配置 → 消息安全」里可点**「拉取 Bot 已加入的群」**一键填入（需 Bot 在线） |
 | `GATE_DEFAULT_ENABLED` | 框架级门控默认策略：`true` = 未配置规则时跟随插件默认开关；`false` = **全局默认禁用 + 白名单群放行** |
 | `OUTPUT_GUARD_ENABLED` | 是否启用消息输出守卫（开发期建议 `true`；私聊一律拦截） |
 

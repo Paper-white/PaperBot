@@ -325,10 +325,12 @@
   var SELECT_SEARCH_THRESHOLD = 8;
 
   // 一个列表项（标签）：内容 + 删除按钮
-  function chipHtml(value) {
+  function chipHtml(value, label) {
+    // label 省略时显示值本身；有 label（如群名）时显示「值（label）」，但 data-chip-value 始终存「值」
+    var text = label ? esc(value) + ' <span class="dim">（' + esc(label) + '）</span>' : esc(value);
     return (
       '<span class="chip" data-chip-value="' + esc(value) + '">' +
-      '<span class="chip-text">' + esc(value) + '</span>' +
+      '<span class="chip-text">' + text + '</span>' +
       '<button type="button" class="chip-x" data-chip-del title="移除">×</button>' +
       '</span>'
     );
@@ -364,6 +366,10 @@
     } else if (field.type === 'list') {
       // 列表型：标签（chips）编辑——输入后点「添加」/回车加入，每项可删
       var listVal = Array.isArray(field.value) ? field.value : (field.value ? [field.value] : []);
+      // source=groups：额外提供「一键拉取 Bot 已加入的群」按钮
+      var srcBtn = field.source === 'groups'
+        ? '<button type="button" class="btn small ghost" data-chip-source="' + key + '">拉取 Bot 已加入的群</button>'
+        : '';
       control =
         '<input type="hidden" ' + common + 'value="' + esc(JSON.stringify(listVal)) + '">' +
         '<div class="chips" data-chips="' + key + '">' +
@@ -374,7 +380,8 @@
           .join('') +
         '<input class="input chip-input" data-chip-input="' + key + '" placeholder="输入后回车 / 点添加">' +
         '<button type="button" class="btn small ghost" data-chip-add="' + key + '">添加</button>' +
-        '</div>';
+        '</div>' +
+        srcBtn;
     } else if (field.choices && field.choices.length) {
       var current = field.value === null || field.value === undefined ? '' : String(field.value);
       var clist = field.choices.slice();
@@ -605,6 +612,34 @@
     }
     scope.__chipsDelegation = function (ev) {
       var t = ev.target;
+      if (t && t.dataset && t.dataset.chipSource) {
+        // source=groups：拉取协议端「Bot 已加入的群」→ 合并进 chips
+        var skey = t.dataset.chipSource;
+        var sbox = scope.querySelector('[data-chips="' + skey + '"]');
+        if (!sbox) return;
+        t.disabled = true;
+        api('/groups')
+          .then(function (d) {
+            var existing = collectChips(sbox);
+            var input2 = sbox.querySelector('[data-chip-input="' + skey + '"]');
+            (d.items || []).forEach(function (g) {
+              var gid = String(g.group_id || '');
+              if (!gid || existing.indexOf(gid) >= 0) return;
+              existing.push(gid);
+              if (input2) input2.insertAdjacentHTML('beforebegin', chipHtml(gid, g.group_name || ''));
+            });
+            var hidden2 = scope.querySelector('input[type=hidden][data-key="' + skey + '"]');
+            if (hidden2) hidden2.value = JSON.stringify(collectChips(sbox));
+            toast('已拉取 ' + (d.items || []).length + ' 个群' + (d.online ? '' : '（离线，来自本地记录）'), d.online ? 'ok' : 'err');
+          })
+          .catch(function (err) {
+            toast('拉取失败：' + err.message, 'err');
+          })
+          .then(function () {
+            t.disabled = false;
+          });
+        return;
+      }
       if (t && t.dataset && t.dataset.chipDel !== undefined) {
         var box = t.closest('[data-chips]');
         if (!box) return;

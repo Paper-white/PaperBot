@@ -29,7 +29,13 @@ def _field(
     secret: bool = False,
     hint: str = "",
     choices: Optional[list[str]] = None,
+    source: str = "",
 ) -> dict[str, Any]:
+    """构造一个配置字段。
+
+    `source` 给前端提示「候选值来源」：目前只支持 `"groups"` —— 表示该 list 字段
+    可一键从协议端拉取「Bot 已加入的群」填充（见 app.js 的 fillGroupSource）。
+    """
     return {
         "key": key,
         "label": label,
@@ -37,6 +43,7 @@ def _field(
         "secret": secret,
         "hint": hint,
         "choices": choices or [],
+        "source": source,
     }
 
 
@@ -92,6 +99,7 @@ SECTIONS: list[dict[str, Any]] = [
                 "允许活跃的群（白名单）",
                 "list",
                 hint="如 [\"123456789\"]；为空 = 不向任何群发消息（安全默认）",
+                source="groups",
             ),
             _field(
                 "GATE_DEFAULT_ENABLED",
