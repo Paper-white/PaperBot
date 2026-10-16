@@ -23,7 +23,7 @@ from src.core.models import (
     SCOPE_GROUP,
     level_name as _level_name,
 )
-from webui.deps import require_token
+from webui.deps import group_name_map, require_token, user_nickname_map
 
 router = APIRouter(dependencies=[Depends(require_token)], tags=["permissions"])
 
@@ -47,6 +47,12 @@ def _serialize(grant) -> dict[str, Any]:
 async def list_permissions() -> dict:
     """全部手动授权记录 + 分类视图（全局黑名单 / 分群管理员 / 其它）。"""
     grants = [_serialize(g) for g in await permission.list_grants()]
+    # 补名字（群作用域用群名、个人作用域用最近昵称），便于区分；离线时为空只显示 ID
+    gmap = await group_name_map()
+    umap = await user_nickname_map([g["user_id"] for g in grants])
+    for g in grants:
+        g["user_name"] = umap.get(g["user_id"], "")
+        g["scope_name"] = gmap.get(g["scope_id"], "") if g["scope_type"] == SCOPE_GROUP else ""
     blacklist = [
         g
         for g in grants

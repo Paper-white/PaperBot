@@ -47,6 +47,11 @@
     return '<span class="badge ' + (color || 'grey') + '">' + esc(text) + '</span>';
   }
 
+  // ID + 备注名（群名 / 昵称）：name 为空时只显示 ID（与原来一致）
+  function withName(id, name) {
+    return esc(id) + (name ? ' <span class="dim">（' + esc(name) + '）</span>' : '');
+  }
+
   function stat(label, value, sub) {
     return (
       '<div class="stat"><div class="label">' + esc(label) + '</div>' +
@@ -659,12 +664,13 @@
         var scope =
           g.scope_type === 'global'
             ? '全局'
-            : (SCOPE_LABEL[g.scope_type] || g.scope_type) + '[' + esc(g.scope_id) + ']';
+            : (SCOPE_LABEL[g.scope_type] || g.scope_type) + '[' +
+              withName(g.scope_id, g.scope_type === 'group' ? g.scope_name : '') + ']';
         var del =
           '<button class="btn small danger" data-grant-del="' + esc(g.user_id) + '" ' +
           'data-grant-group="' + (g.scope_type === 'group' ? esc(g.scope_id) : '') + '">移除</button>';
         return (
-          '<tr><td class="mono">' + esc(g.user_id) + '</td>' +
+          '<tr><td class="mono">' + withName(g.user_id, g.user_name) + '</td>' +
           (mode === 'blacklist' ? '' : '<td>' + scope + '</td>') +
           '<td>' + badge(g.level + ' ' + g.level_name, LEVEL_COLOR[g.level] || 'grey') + '</td>' +
           '<td>' + esc(g.updated_by || '-') + '</td>' +
@@ -2085,7 +2091,7 @@
             .map(function (s) {
               return (
                 '<tr><td>' + badge(s.scope_label, s.scope_type === 'group' ? 'blue' : 'pink') + '</td>' +
-                '<td class="mono">' + esc(s.scope_id) + '</td>' +
+                '<td class="mono">' + withName(s.scope_id, s.scope_name) + '</td>' +
                 '<td class="mono dim">' + esc(s.plugin_name || '（共享）') + '</td>' +
                 '<td class="mono">' + esc(s.preset_name || '-') + '</td>' +
                 '<td class="mono dim">' + esc(s.provider_name || '-') + '</td>' +
@@ -2115,7 +2121,7 @@
         ? users.items
             .map(function (u) {
               return (
-                '<tr><td class="mono">' + esc(u.user_id) + '</td>' +
+                '<tr><td class="mono">' + withName(u.user_id, u.nickname) + '</td>' +
                 '<td class="hint">' + u.message_count + ' 条</td>' +
                 '<td class="hint">' + esc((u.impression || '').slice(0, 40) || '（还没印象）') + '</td>' +
                 '<td class="hint">' + (u.fact_count || 0) + ' 条</td>' +
@@ -2147,7 +2153,7 @@
         ? groups.items
             .map(function (g) {
               return (
-                '<tr><td class="mono">' + esc(g.group_id) + '</td>' +
+                '<tr><td class="mono">' + withName(g.group_id, g.group_name) + '</td>' +
                 '<td>' + esc((g.memory || '').slice(0, 120) || '（暂无）') + '</td>' +
                 '<td class="hint">' + g.message_count + ' 条</td>' +
                 '<td class="hint">' + esc(g.updated_at || '-') + '</td></tr>'
@@ -2263,7 +2269,7 @@
           : '<tr><td colspan="3" class="hint">这个会话还没消息</td></tr>';
         box.innerHTML =
           '<div class="card"><div class="card-head"><div>' +
-          '<div class="card-title">会话 #' + id + ' · ' + esc(s.scope_label) + ' ' + esc(s.scope_id) +
+          '<div class="card-title">会话 #' + id + ' · ' + esc(s.scope_label) + ' ' + withName(s.scope_id, s.scope_name) +
           ' <span class="mono dim">' + esc(s.plugin_name || '（共享）') + '</span></div>' +
           '<div class="card-note">人设 ' + esc(s.preset_name || '（全局默认）') + ' · 服务商 ' +
           esc(s.provider_name || '（默认）') + ' · ' + s.message_count + ' 条</div>' +

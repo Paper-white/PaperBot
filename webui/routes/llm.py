@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from src.config import settings
 from src.core import llm
 from src.core.llm import LLMError, llm_available
-from webui.deps import SECRET_PLACEHOLDER, require_token
+from webui.deps import SECRET_PLACEHOLDER, group_name_map, require_token, user_nickname_map
 
 logger = nonebot.logger
 
@@ -394,8 +394,18 @@ async def list_sessions(limit: int = 100) -> dict:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit 需在 1~500 之间")
     items = await llm.list_sessions(limit=limit)
+    # 群作用域用群名、个人作用域用最近昵称，便于区分（离线时名字为空，只显示 ID）
+    gmap = await group_name_map()
+    umap = await user_nickname_map(
+        [it["scope_id"] for it in items if it.get("scope_type") != "group"]
+    )
     for item in items:
         item["scope_label"] = SCOPE_LABELS.get(item.get("scope_type", ""), item.get("scope_type", ""))
+        item["scope_name"] = (
+            gmap.get(item.get("scope_id", ""), "")
+            if item.get("scope_type") == "group"
+            else umap.get(item.get("scope_id", ""), "")
+        )
     return {"items": items, "count": len(items), "scope_labels": SCOPE_LABELS}
 
 
@@ -457,6 +467,9 @@ async def list_users(limit: int = 100) -> dict:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit 需在 1~500 之间")
     items = await llm.list_profiles(limit=limit)
+    nick_map = await user_nickname_map([it["user_id"] for it in items])
+    for it in items:
+        it["nickname"] = nick_map.get(it["user_id"], "")
     return {"items": items, "count": len(items)}
 
 
@@ -513,6 +526,9 @@ async def list_group_profiles(limit: int = 100) -> dict:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit 需在 1~500 之间")
     items = await llm.list_group_profiles(limit=limit)
+    gmap = await group_name_map()
+    for it in items:
+        it["group_name"] = gmap.get(it["group_id"], "")
     return {"items": items, "count": len(items)}
 
 

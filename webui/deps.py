@@ -98,3 +98,47 @@ def sqlite_db_size(db_path: str) -> tuple[int, str]:
         except OSError:
             continue
     return total, human_size(total)
+
+
+# --------------------------------------------------------------------------- #
+# 群名 / 用户昵称标注（WebUI 各处「ID 后面显示名字」共用）
+# --------------------------------------------------------------------------- #
+async def group_name_map() -> dict[str, str]:
+    """在线取「群号 → 群名」；离线或失败返回空 dict（绝不影响调用方）。"""
+    try:
+        data = await call_api("get_group_list")
+    except Exception:  # noqa: BLE001 - 离线 / 协议端失败时静默降级
+        return {}
+    out: dict[str, str] = {}
+    for raw in data or []:
+        gid = str(raw.get("group_id", "") or "")
+        name = str(raw.get("group_name", "") or "").strip()
+        if gid and name:
+            out[gid] = name
+    return out
+
+
+async def user_nickname_map(user_ids: list[str]) -> dict[str, str]:
+    """从聊天流水里取「QQ → 最近昵称」（离线可用；取每个 user_id 最大 id 那一条）。"""
+    from sqlalchemy import select
+
+    from src.core.database import get_session
+    from src.core.models import ChatMessage
+
+    ids = [str(u) for u in (user_ids or []) if str(u)]
+    if not ids:
+        return {}
+    async with get_session(readonly=True) as session:
+        rows = (
+            await session.execute(
+                select(ChatMessage.user_id, ChatMessage.nickname, ChatMessage.id)
+                .where(ChatMessage.user_id.in_(ids), ChatMessage.nickname != "")
+                .order_by(ChatMessage.id.asc())
+            )
+        ).all()
+    out: dict[str, str] = {}
+    for user_id, nickname, _id in rows:  # 升序遍历、后者覆盖前者 → 留最新昵称
+        name = str(nickname or "").strip()
+        if name:
+            out[str(user_id)] = name
+    return out

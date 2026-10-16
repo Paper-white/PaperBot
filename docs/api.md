@@ -57,23 +57,23 @@ PUT    /api/llm/presets/{name}                           新建 / 保存人设�
 DELETE /api/llm/presets/{name}                           删除人设
 POST   /api/llm/presets/import                           导入人设 {text, filename?, force?}
 GET    /api/llm/presets/{name}/export                    导出人设为 .md
-GET    /api/llm/sessions[?limit=]                        会话列表（作用域 / 谁 / 插件 / 消息数）
+GET    /api/llm/sessions[?limit=]                        会话列表（作用域 / 谁 / 插件 / 消息数；带 scope_name 备注名）
 GET    /api/llm/sessions/{id}/messages[?limit=]          某会话的消息
 PUT    /api/llm/sessions/{id}                            给会话换人设 / 换服务商
 DELETE /api/llm/sessions/{id}                            删除单条会话（连带消息）
 DELETE /api/llm/sessions?scope_type=&scope_id=&plugin_name=  按作用域批量清空会话
-GET    /api/llm/users[?limit=]                           有长期记忆的用户列表
+GET    /api/llm/users[?limit=]                           有长期记忆的用户列表（带 nickname 备注名）
 GET    /api/llm/users/{uid}                              用户印象 + 关键信息
 PUT    /api/llm/users/{uid}/impression                   手写印象
 PUT    /api/llm/users/{uid}/facts                        手加 / 更新关键信息（人工来源）
 DELETE /api/llm/users/{uid}/facts?key=                   删单条（key 省略 = 全删）
 DELETE /api/llm/users/{uid}                              清空该用户长期记忆
-GET    /api/llm/groups[?limit=]                          有群记忆的群列表（`llm_group_profile`）
+GET    /api/llm/groups[?limit=]                          有群记忆的群列表（`llm_group_profile`；带 group_name 备注名）
 PUT    /api/llm/groups/{gid}/memory                      人工改写群记忆
 POST   /api/llm/chat                                     无状态试聊 {prompt, preset?, provider?}
 
 # ---- 权限 / 群 ----
-GET    /api/permissions                                  权限记录（黑名单 / 分群管理员 / 其它 / owners / levels）
+GET    /api/permissions                                  权限记录（黑名单 / 分群管理员 / 其它 / owners / levels；带 user_name/scope_name 备注名）
 PUT    /api/permissions                                  写入授权 {user_id, level, group_id?}（level 3 拒绝）
 DELETE /api/permissions?user_id=&group_id=               删除授权
 GET    /api/groups                                       群列表（含每群规则与授权；离线回退 DB 推导）
