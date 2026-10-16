@@ -41,8 +41,25 @@
    `chat_message` / `llm_user_profile` / `llm_group_profile` / `llm_session.summary`
 2. **WebUI 打磨**：前端交互细节、更多 API、按需补设置项
 3. **AI 工具调用（function calling）**：让 AI 自己查群聊上下文 / 用户画像（想法池）
-4. **长期记忆与召回优化**：对标两 AstrBot 记忆插件（代码闸门 / 分槽保底 / 软衰减 / 向量检索等）
-   → [`07-memory-optimization.md`](07-memory-optimization.md)（P0 已落地：跨窗口隔离 / 摘要补注入 / 水位线修复；待做：代码闸门等）
+4. **长期记忆与召回优化**：见 [`07-memory-optimization.md`](07-memory-optimization.md)
+   （主体已落地：跨窗口隔离 / 代码闸门 / 分槽保底 / 软衰减 / 改口版本链 / 归档；
+   待做：WebUI 档位下拉与改口历史展示、记忆整合、向量检索）
+
+## 已完成（2026-10-16）— 测试反馈修复（4 项）
+
+> 来源：2026-10-15 夜间真机测试反馈。均优先于 07 文档待办（前两项是 bug/费用，后两项是高频体验）。
+
+- **门控尊重输出守卫**（`src/core/gate.py`）：`is_feature_enabled` 开头先判「按输出守卫该目标能否收到消息」，
+  发不出去的目标（非白名单群 / 私聊）**整插件不运行** → 不再「插件跑完、LLM 额度已花掉，消息才被出口丢弃」。
+  复用 `guard.is_api_allowed`（同一份白名单）。⚠️ 副作用：受保护插件也会被可达性挡在非白名单目标外。
+- **静默成功访问日志**（`src/core/connlog.py`）：NoneBot 把 uvicorn access 接入 loguru 且固定 INFO，
+  WebUI 每 2s/5s 轮询导致日志被 `GET ... 200` 刷屏；现静默 2xx/3xx（4xx/5xx 保留）。
+  开关 `LOG_ACCESS_SILENT`（默认 true）。
+- **WebUI 群号/QQ 备注名**（`webui/deps.py` + `webui/routes/llm.py` / `permissions.py` + `app.js`）：
+  `group_name_map`（在线取群名，离线优雅降级）/ `user_nickname_map`（从 `chat_message` 取最近昵称，离线可用）；
+  LLM 页会话/用户/群记忆、权限页的 ID 后显示「（群名 / 昵称）」；`data-*` / `<option value>` 仍存裸 ID。
+- **白名单群一键拉取**（`webui/routes/config.py` + `app.js`）：`_field` 加 `source` 标记，
+  `BOT_ACTIVE_GROUPS` 标 `source=groups`，前端渲染「拉取 Bot 已加入的群」按钮（带群名显示、存群号）。
 
 ## 已完成（2026-10-15）
 
