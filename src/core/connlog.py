@@ -1,6 +1,8 @@
-"""连接日志降噪（NoneBot OneBot 适配器「连不上协议端」的刷屏治理）。
+"""日志降噪（两类运行期刷屏的治理）。
 
-## 问题
+本模块给 loguru 挂一个**全局 patcher**（对所有 sink 生效），统一治理两类噪声：
+
+## 一、协议端连不上时的重连报错
 
 OneBot v11 适配器在**连不上协议端**时会每 3 秒重连一次，每次都往日志里打一整段
 ERROR + 完整 traceback：
@@ -13,18 +15,23 @@ ERROR + 完整 traceback：
 
 结果就是**日志被同一条报错刷屏**，既难读、又盖住了真正有用的信息。
 
+## 二、WebUI 访问日志刷屏
+
+NoneBot 把 uvicorn 的 `access` logger 接到 loguru 且级别固定 `INFO`
+（`nonebot/drivers/fastapi.py` 里写死），于是**每个 HTTP 请求都进日志**。
+而 WebUI 前端会周期性轮询（日志页每 2 秒拉一次 `/logs/tail`、状态页每 5 秒拉一次），
+结果日志被 `"GET /api/.... HTTP/1.1" 200` 刷屏、盖住真正有用的信息。
+
 ## 处理
 
 本模块给 loguru 挂一个**全局 patcher**（对所有 sink 生效，包括 NoneBot 已配置的），
-只针对这条特定日志做三件事：
+按需改写记录：
 
-1. **可读化**：把原始英文 + traceback 换成一句中文提示，并从异常里提取「人话」原因，
-   顺带给出排查建议；
-2. **降级**：ERROR → WARNING（连接失败可自动重连，不是致命错误）；
-3. **节流**：同一地址首次完整提示，之后在冷却窗口内**只计数不刷屏**，
-   窗口结束再汇总打一条「已重试 N 次」。
+1. **重连报错**（第一节）：可读化 + 降级 WARNING + 节流；
+2. **成功访问日志**（2xx/3xx）：直接静默（TRACE），不再刷屏 ——
+   4xx/5xx 保留（排查 404/500 时仍可见）。由 `LOG_ACCESS_SILENT` 控制（默认开）。
 
-> 只匹配「连接建立失败 / 处理数据失败」这种重连日志，其它日志一律不动。
+> 只匹配这两类特定日志，其它日志一律不动。
 """
 
 from __future__ import annotations
@@ -34,6 +41,8 @@ import time
 from typing import Any, Optional
 
 import nonebot
+
+from src.config import settings
 
 logger = nonebot.logger
 
@@ -105,13 +114,44 @@ def _extract_url(record: dict) -> str:
     return match.group(0) if match else "协议端"
 
 
+# --------------------------------------------------------------------------- #
+# 访问日志静默（WebUI 轮询刷屏治理）
+# --------------------------------------------------------------------------- #
+# uvicorn access 日志形如：`100.64.0.20:52836 - "GET /api/logs/tail HTTP/1.1" 200`
+# 抓末尾的状态码；只有「成功（2xx/3xx）」才静默，4xx/5xx 保留以便排查。
+_ACCESS_RE = re.compile(r'"\s*([0-9]{3})\s*$')
+
+
+def _is_success_access(record: dict) -> bool:
+    """判断这条是否为「成功的 HTTP 访问日志」（2xx/3xx）。"""
+    if not settings.log_access_silent:
+        return False
+    # name 判断 + 消息内容双保险：不同版本 name 可能不同，用消息特征兜底
+    message = str(record.get("message", ""))
+    if not message:
+        return False
+    match = _ACCESS_RE.search(message)
+    if not match:
+        return False
+    status = int(match.group(1))
+    return 200 <= status < 400
+
+
 def _handle_record(record: dict) -> None:
-    """patcher：命中则改写记录（降级 + 可读化 + 节流）。
+    """patcher：命中则改写记录（重连报错降噪 / 成功访问日志静默）。
 
     时序（loguru 内部）：patcher 在 `handler.emit()` **之前**运行，
     而 `emit()` 开头就用 `record["level"].no` 做过滤 —— 因此把 level 改成 TRACE
     即可让这条记录被所有 handler 跳过（真正的「静默」，不产生任何输出行）。
     """
+    # ① 成功的访问日志 → 静默
+    if _is_success_access(record):
+        _silence(record)
+        record["message"] = ""
+        record["exception"] = None
+        return
+
+    # ② 协议端重连报错 → 降噪
     if not _looks_like_reconnect(record):
         return
 

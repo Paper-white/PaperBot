@@ -221,6 +221,12 @@ LOGS_SECTIONS: list[dict[str, Any]] = [
             ),
             _field("LOG_DIR", "日志目录", hint="相对项目根目录"),
             _field("LOG_KEEP_DAYS", "保留天数", "int", hint="启动时清理更早的日志，<=0 不清理"),
+            _field(
+                "LOG_ACCESS_SILENT",
+                "静默成功访问日志",
+                "bool",
+                hint="静默 2xx/3xx 的 HTTP 访问日志（WebUI 轮询频繁）；4xx/5xx 仍保留",
+            ),
         ],
     },
 ]

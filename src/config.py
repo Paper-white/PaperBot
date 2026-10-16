@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     log_dir: str = "logs"
     # 日志保留天数（<=0 表示不自动清理）
     log_keep_days: int = 7
+    # 静默「成功的 HTTP 访问日志」（2xx/3xx）：NoneBot 把 uvicorn access 接到 loguru 且固定 INFO，
+    # 而 WebUI 会周期轮询，导致日志被 "GET /api/... 200" 刷屏。4xx/5xx 仍保留以便排查。
+    log_access_silent: bool = True
 
     # ============ 消息安全（门控默认策略 + 输出守卫共用一份群白名单） ============
     # 「Bot 允许活跃的群」——唯一白名单来源：
