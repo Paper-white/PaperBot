@@ -114,9 +114,12 @@ cmd = feature.command("weather", level=LEVEL_USER, description="查询天气")
 
 - `protected=True` 的插件永远放行（不能被禁用）；
 - `GATE_DEFAULT_ENABLED=false` 时：未命中规则的群默认禁用，仅 `BOT_ACTIVE_GROUPS` 内的群放行，私聊一律不放行；
-- 0 级黑名单用户**一票否决**（连受保护插件也不回应）。
+- 0 级黑名单用户**一票否决**（连受保护插件也不回应）；
+- ⚠️ **输出守卫可达性优先于一切**：门控最开头先看「按输出守卫这个目标能不能收到消息」，
+  发不出去的目标（非白名单群 / 私聊，且 `OUTPUT_GUARD_ENABLED=true`）**插件直接不运行**
+  （含 `protected` 插件）——避免插件跑完、额度花掉后消息才被出口丢弃。
 
-> 门控（入口）与消息输出守卫（出口）的分工见 [`architecture.md`](architecture.md#门控-vs-守卫不能互相替代)。
+> 门控（入口）与消息输出守卫（出口）的分工见 [`architecture.md`](architecture.md#门控-vs-守卫不能互相替代但门控会尊重守卫)。
 
 ---
 
@@ -318,7 +321,8 @@ async def _(event: MessageEvent, args=CommandArg()):
 
 1. 别写「定时广播到所有群」这种逻辑，会被逐条拦掉（日志里能看到 WARNING）；
 2. 本地开发时想测试发消息，请把目标群加进 `BOT_ACTIVE_GROUPS`；
-3. **不要**试图绕过 `call_api`（如自己起 HTTP 请求发消息）——这是开发期防误发的兜底闸门。
+3. **不要**试图绕过 `call_api`（如自己起 HTTP 请求发消息）——这是开发期防误发的兜底闸门；
+4. ⚠️ 门控已「尊重」守卫：发不出去的群 / 私聊，插件**根本不会被触发**（不再有「跑完才发现发不出去」的白跑）。
 
 ---
 
