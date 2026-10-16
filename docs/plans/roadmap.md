@@ -17,6 +17,7 @@
 | **Phase 2.6** | 框架版本控制（WebUI 一键拉取云端版本 + 重启）→ [`05-version-control.md`](05-version-control.md) | ✅ 已完成 |
 | **Phase 3** | WebUI 打磨（第一轮已完成：自动刷新 / 浮窗 / 输入控件 / 命令大表 / 日志页；后续按需继续） | 🚧 进行中 |
 | **Phase 3（06 号）** | WebUI 配置修复 + 配置热重载 + 捂嘴命令 → [`06-webui-config-and-mute.md`](06-webui-config-and-mute.md) | 🚧 进行中 |
+| **插件（08 号）** | CustomSkinLoader 日志解析插件（皮肤 / 披风来源判定）→ [`08-customskinloader-log.md`](08-customskinloader-log.md) | ✅ 已完成 |
 
 ## Phase 1 已完成清单（存档）
 

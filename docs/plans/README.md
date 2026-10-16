@@ -58,3 +58,4 @@
 | [`05-version-control.md`](05-version-control.md) | 框架版本控制（WebUI 一键拉取云端版本 + 重启） | 已完成 |
 | [`06-webui-config-and-mute.md`](06-webui-config-and-mute.md) | WebUI 配置修复 + 配置热重载 + 捂嘴命令 | 进行中 |
 | [`07-memory-optimization.md`](07-memory-optimization.md) | 长期记忆与召回优化（对标两 AstrBot 记忆插件的调研 + 规划） | 规划中 |
+| [`08-customskinloader-log.md`](08-customskinloader-log.md) | CustomSkinLoader 日志解析插件（皮肤 / 披风来源判定） | 已完成 |

@@ -74,7 +74,8 @@ PaperBot/
 ├── plugins/                    # 功能插件（一插件一文件夹）
 │   ├── paperbot_console/       # 总控插件（启停 / 权限 / 黑名单）
 │   ├── paperbot_chat/          # 人设对话插件（LLM + 记忆）
-│   └── paperbot_ping/          # 在线状态测试插件
+│   ├── paperbot_ping/          # 在线状态测试插件
+│   └── paperbot_csl/           # CustomSkinLoader 日志解析插件
 ├── webui/                      # WebUI 管理后台
 │   ├── api.py                  # 挂载入口（/api + 页面 + 静态资源）
 │   ├── routes/                 # 各页面接口

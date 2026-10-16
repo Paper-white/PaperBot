@@ -43,7 +43,8 @@ docs/
     ├── 04-backlog.md    待办与想法池
     ├── 05-version-control.md
     ├── 06-webui-config-and-mute.md
-    └── 07-memory-optimization.md  长期记忆与召回优化（调研 + 规划）
+    ├── 07-memory-optimization.md  长期记忆与召回优化（调研 + 规划）
+    └── 08-customskinloader-log.md  CustomSkinLoader 日志解析插件
 ```
 
 > 模块 / 数据表 / 目录结构的**明细**统一维护在 [`architecture.md`](architecture.md)，
