@@ -68,5 +68,6 @@
 
 ## 遗留 / 后续
 
-- **未做真机连通**：还没用真实 LLM key 在群里跑过 `%ai`（含流式与记忆触发）→ 见 `04-backlog.md`
+- ~~未做真机连通~~ → **已完成**：已用真实 LLM key 在群里跑通 `%ai`（含流式与记忆触发），见 [`04-backlog.md`](04-backlog.md)
 - 试聊接口是 `POST /api/llm/chat`（**不是**早期设想的 `/llm/test`）
+- 长期记忆的持续优化见 [`07-memory-optimization.md`](07-memory-optimization.md)（主体已落地）
