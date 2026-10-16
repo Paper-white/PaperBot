@@ -1671,6 +1671,43 @@ async def get_profile(
     }
 
 
+async def list_fact_history(user_id: str | int) -> list[dict]:
+    """列出某用户「被改口取代」的旧事实（`status=superseded`），供 WebUI 展示「以前说过」。
+
+    只读、扁平返回（按更新时间倒序）；每条保留原 key/value/scope/usage 与失效时间。
+    这些行**不参与注入**（`get_profile` 只返回 active），仅作历史留痕。
+    """
+    uid = str(user_id)
+    async with get_session(readonly=True) as session:
+        rows = (
+            (
+                await session.execute(
+                    select(LlmUserFact)
+                    .where(
+                        LlmUserFact.user_id == uid,
+                        LlmUserFact.status == FACT_STATUS_SUPERSEDED,
+                    )
+                    .order_by(LlmUserFact.updated_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "id": f.id,
+            "key": f.fact_key,
+            "value": f.fact_value or "",
+            "source": f.source or LLM_FACT_AUTO,
+            "scope_type": f.scope_type or FACT_SCOPE_PRIVATE,
+            "scope_id": f.scope_id or "",
+            "usage": f.usage or FACT_USAGE_MENTION,
+            "updated_at": fmt_dt(f.updated_at),
+        }
+        for f in rows
+    ]
+
+
 async def set_impression(
     user_id: str | int, impression: str, *, count: Optional[int] = None
 ) -> dict:

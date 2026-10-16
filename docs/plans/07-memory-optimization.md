@@ -132,7 +132,7 @@ summary → stable_memory`，**每个非空槽先保底 1 条**再按预算填�
 - [x] 清理废弃 `refresh_profile`；清理死配置 `LLM_GROUP_CONTEXT_MSGS`；`_migrate_llm_fact_scope` 幂等迁移
 
 ### 待办
-- [ ] **WebUI 手写档位下拉 / 改口历史展示**（P3）：用户详情页给 fact 加 usage 选择、按 `supersedes_id` 展示旧值
+- [x] **WebUI 手写档位下拉 / 改口历史展示**（2026-10-16）：用户详情页可选用法档写入、展示每条 fact 的用法档、底部列出「改口历史」（`superseded` 旧值只读留痕）
 - [ ] 记忆整合/压缩：低价值旧记忆聚合成高层摘要（`consolidation` 任务）
 - [ ] **向量检索**：目前全塞 prompt（backlog 已记）→ 建议上 **pgvector + HNSW/IVFFlat**
 

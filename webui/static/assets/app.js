@@ -2339,18 +2339,34 @@
     api('/llm/users/' + encodeURIComponent(uid))
       .then(function (d) {
         var u = d.item;
+        var usageLabels = u.usage_labels || {};
         var rows = u.facts.length
           ? u.facts
               .map(function (f) {
+                var ulabel = usageLabels[f.usage] || f.usage || 'mention';
                 return (
                   '<tr><td class="mono">' + esc(f.key) + '</td><td>' + esc(f.value) + '</td>' +
+                  '<td>' + badge(ulabel, f.usage === 'tone' ? 'amber' : (f.usage === 'uncertain' ? 'grey' : 'green')) + '</td>' +
                   '<td>' + badge(f.source, f.source === 'manual' ? 'blue' : 'grey') + '</td>' +
                   '<td class="hint">' + esc(f.updated_at || '-') + '</td>' +
                   '<td><button class="btn small danger" data-llm-fact-del="' + esc(uid) + '|' + esc(f.key) + '">删除</button></td></tr>'
                 );
               })
               .join('')
-          : '<tr><td colspan="5" class="hint">还没有关键信息</td></tr>';
+          : '<tr><td colspan="6" class="hint">还没有关键信息</td></tr>';
+
+        var history = u.history || [];
+        var histRows = history.length
+          ? history
+              .map(function (h) {
+                return (
+                  '<tr><td class="mono">' + esc(h.key) + '</td><td class="dim">' + esc(h.value) + '</td>' +
+                  '<td class="hint">' + esc(h.updated_at || '-') + '</td></tr>'
+                );
+              })
+              .join('')
+          : '<tr><td colspan="3" class="hint">暂无被改口取代的旧值</td></tr>';
+
         box.innerHTML =
           '<div class="card"><div class="card-head"><div>' +
           '<div class="card-title">用户 ' + esc(uid) + '</div>' +
@@ -2361,12 +2377,21 @@
           '<div class="form-row spaced"><button class="btn" data-llm-imp-save="' + esc(uid) + '">保存印象</button>' +
           '<button class="btn ghost" data-llm-user-close>收起</button></div>' +
           '<div class="table-wrap spaced"><table><thead><tr>' +
-          '<th>键</th><th>值</th><th>来源</th><th>更新</th><th>操作</th></tr></thead><tbody>' + rows +
+          '<th>键</th><th>值</th><th>用法</th><th>来源</th><th>更新</th><th>操作</th></tr></thead><tbody>' + rows +
           '</tbody></table></div>' +
           '<div class="form-row spaced">' +
           '<div class="field"><label>键</label><input class="input" id="llm-fact-key" placeholder="如 城市"></div>' +
           '<div class="field" style="flex:1;min-width:200px"><label>值</label><input class="input wide" id="llm-fact-value" placeholder="如 杭州"></div>' +
-          '<button class="btn" data-llm-fact-add="' + esc(uid) + '">写入关键信息</button></div></div>';
+          '<div class="field"><label>用法</label><select class="input" id="llm-fact-usage">' +
+          '<option value="mention">可自然提及</option>' +
+          '<option value="tone">只影响语气，勿说破</option>' +
+          '<option value="uncertain">不太确定，谨慎参考</option>' +
+          '</select></div>' +
+          '<button class="btn" data-llm-fact-add="' + esc(uid) + '">写入关键信息</button></div>' +
+          '<div class="card-note spaced">改口历史（被新值取代的旧值，仅留痕、不注入）</div>' +
+          '<div class="table-wrap"><table><thead><tr>' +
+          '<th>键</th><th>旧值</th><th>被取代于</th></tr></thead><tbody>' + histRows +
+          '</tbody></table></div></div>';
       })
       .catch(function (err) {
         box.innerHTML = errorBox(err);
@@ -2783,6 +2808,7 @@
         send('/llm/users/' + encodeURIComponent(fuid) + '/facts', 'PUT', {
           key: key,
           value: val('#llm-fact-value'),
+          usage: val('#llm-fact-usage') || 'mention',
         })
           .then(function (res) {
             toast(res.message || '已写入', 'ok');

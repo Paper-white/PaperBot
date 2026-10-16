@@ -60,6 +60,10 @@
   LLM 页会话/用户/群记忆、权限页的 ID 后显示「（群名 / 昵称）」；`data-*` / `<option value>` 仍存裸 ID。
 - **白名单群一键拉取**（`webui/routes/config.py` + `app.js`）：`_field` 加 `source` 标记，
   `BOT_ACTIVE_GROUPS` 标 `source=groups`，前端渲染「拉取 Bot 已加入的群」按钮（带群名显示、存群号）。
+- **WebUI 记忆档位/改口历史**（`src/core/llm.py` + `webui/routes/llm.py` + `app.js`）：
+  新增 `list_fact_history()`（查 `status=superseded` 旧值，只读不注入）；
+  `GET /llm/users/{uid}` 带 `usage_labels` + `history`；`PUT .../facts` 支持 `usage`；
+  用户详情页可选用法档写入、每条 fact 显示用法档、底部列「改口历史」。
 
 ## 已完成（2026-10-15）
 

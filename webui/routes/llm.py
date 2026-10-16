@@ -47,6 +47,13 @@ FACT_SOURCE_LABELS = {
     "manual": "人工记录",
 }
 
+# 记忆用法档（前端下拉 / 展示共用）
+FACT_USAGE_LABELS = {
+    "mention": "可自然提及",
+    "tone": "只影响语气",
+    "uncertain": "不太确定",
+}
+
 
 # --------------------------------------------------------------------------- #
 # 入参模型
@@ -90,6 +97,7 @@ class SessionPayload(BaseModel):
 class FactPayload(BaseModel):
     key: str
     value: str
+    usage: str = ""  # 用法档（mention/tone/uncertain）；空 = 由 llm.set_fact 归一为 mention
 
 
 class ImpressionPayload(BaseModel):
@@ -478,6 +486,8 @@ async def get_user(user_id: str) -> dict:
     """查看某用户的印象 + 关键信息（QQ 命令 `%ai 印象` 的 WebUI 版本）。"""
     data = await llm.get_profile(user_id)
     data["source_labels"] = FACT_SOURCE_LABELS
+    data["usage_labels"] = FACT_USAGE_LABELS
+    data["history"] = await llm.list_fact_history(user_id)  # 被改口取代的旧值（只读展示）
     return {"ok": True, "item": data}
 
 
@@ -493,7 +503,13 @@ async def set_user_fact(user_id: str, payload: FactPayload) -> dict:
     if not payload.key.strip():
         raise HTTPException(status_code=400, detail="键不能为空")
     try:
-        data = await llm.set_fact(user_id, payload.key, payload.value, source=llm.LLM_FACT_MANUAL)
+        data = await llm.set_fact(
+            user_id,
+            payload.key,
+            payload.value,
+            source=llm.LLM_FACT_MANUAL,
+            usage=payload.usage or "mention",
+        )
     except LLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info(f"WebUI：用户 {user_id} 的关键信息「{payload.key}」已写入")

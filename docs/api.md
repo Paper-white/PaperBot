@@ -63,9 +63,9 @@ PUT    /api/llm/sessions/{id}                            给会话换人设 / �
 DELETE /api/llm/sessions/{id}                            删除单条会话（连带消息）
 DELETE /api/llm/sessions?scope_type=&scope_id=&plugin_name=  按作用域批量清空会话
 GET    /api/llm/users[?limit=]                           有长期记忆的用户列表（带 nickname 备注名）
-GET    /api/llm/users/{uid}                              用户印象 + 关键信息
+GET    /api/llm/users/{uid}                              用户印象 + 关键信息（带用法档 usage_labels 与改口历史 history）
 PUT    /api/llm/users/{uid}/impression                   手写印象
-PUT    /api/llm/users/{uid}/facts                        手加 / 更新关键信息（人工来源）
+PUT    /api/llm/users/{uid}/facts                        手加 / 更新关键信息（人工来源；可带 usage 档）
 DELETE /api/llm/users/{uid}/facts?key=                   删单条（key 省略 = 全删）
 DELETE /api/llm/users/{uid}                              清空该用户长期记忆
 GET    /api/llm/groups[?limit=]                          有群记忆的群列表（`llm_group_profile`；带 group_name 备注名）
